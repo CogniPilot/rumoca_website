@@ -1,0 +1,172 @@
+---
+import TutorialLayout from '../../../layouts/TutorialLayout.astro';
+import ModelWorkbench from '../../../components/tutorials/ModelWorkbench';
+---
+
+<TutorialLayout
+  title="Circuit Components"
+  breadcrumbs={[
+    { label: 'Tutorials', href: '/tutorials' },
+    { label: 'Getting Started', href: '/tutorials/getting-started' },
+    { label: 'Circuit Components' },
+  ]}
+  prev={{ label: 'Series RLC', href: '/tutorials/getting-started/series-rlc' }}
+  next={{ label: 'Bouncing Ball 3D', href: '/tutorials/visualization/bouncing-ball-3d' }}
+>
+  <div class="mb-6 p-4 rounded-lg border border-accent/20 bg-accent/5">
+    <h3 class="text-sm font-semibold text-accent mb-2">What you'll learn</h3>
+    <ul class="list-disc list-inside text-sm text-text-muted space-y-1">
+      <li>Component-based modeling with Modelica packages</li>
+      <li>Connectors, <code class="font-mono text-xs">flow</code> variables, and <code class="font-mono text-xs">connect</code> equations</li>
+      <li>Inheritance with <code class="font-mono text-xs">extends</code> to share common structure</li>
+    </ul>
+  </div>
+
+  <p class="text-text-muted leading-relaxed mb-4">
+    So far every model has been a flat list of equations. One advantage of Modelica is that it supports
+    <strong class="text-text">component-based</strong> modeling &mdash; you build reusable parts and wire them together.
+    This tutorial models an RC circuit from first principles using connectors, inheritance, and
+    connect equations.
+  </p>
+
+  <figure class="mb-6 p-4 rounded-lg border border-border bg-surface flex flex-col items-center">
+    <svg
+      viewBox="0 0 320 210"
+      role="img"
+      aria-label="Series RC circuit: voltage source on the left, resistor across the top, capacitor on the right, ground at the bottom."
+      class="w-full max-w-sm"
+      fill="none"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <!-- Wires (loop) -->
+      <g stroke="var(--color-text-muted)" stroke-width="2">
+        <!-- top edge: split by resistor -->
+        <line x1="70" y1="45" x2="125" y2="45" />
+        <line x1="195" y1="45" x2="250" y2="45" />
+        <!-- left edge: split by source -->
+        <line x1="70" y1="45" x2="70" y2="84" />
+        <line x1="70" y1="126" x2="70" y2="170" />
+        <!-- right edge: split by capacitor -->
+        <line x1="250" y1="45" x2="250" y2="96" />
+        <line x1="250" y1="114" x2="250" y2="170" />
+        <!-- bottom edge -->
+        <line x1="70" y1="170" x2="250" y2="170" />
+        <!-- ground stub -->
+        <line x1="160" y1="170" x2="160" y2="184" />
+      </g>
+
+      <!-- Voltage source -->
+      <circle cx="70" cy="105" r="21" stroke="var(--color-accent)" stroke-width="2" />
+      <g stroke="var(--color-accent)" stroke-width="2">
+        <line x1="70" y1="92" x2="70" y2="100" />
+        <line x1="66" y1="96" x2="74" y2="96" />
+        <line x1="66" y1="114" x2="74" y2="114" />
+      </g>
+
+      <!-- Resistor (IEC rectangle) -->
+      <rect x="125" y="36" width="70" height="18" rx="2" stroke="var(--color-accent)" stroke-width="2" />
+
+      <!-- Capacitor (two plates) -->
+      <g stroke="var(--color-accent)" stroke-width="2">
+        <line x1="234" y1="96" x2="266" y2="96" />
+        <line x1="234" y1="114" x2="266" y2="114" />
+      </g>
+
+      <!-- Ground symbol -->
+      <g stroke="var(--color-text-muted)" stroke-width="2">
+        <line x1="148" y1="184" x2="172" y2="184" />
+        <line x1="153" y1="190" x2="167" y2="190" />
+        <line x1="157" y1="196" x2="163" y2="196" />
+      </g>
+
+      <!-- Labels -->
+      <g fill="var(--color-text)" font-family="Inter, system-ui, sans-serif" font-size="13">
+        <text x="30" y="110" text-anchor="middle">src</text>
+        <text x="160" y="26" text-anchor="middle">R</text>
+        <text x="286" y="110" text-anchor="middle">C</text>
+      </g>
+    </svg>
+    <figcaption class="mt-3 text-xs text-text-muted text-center">
+      Series RC loop &mdash; the four <code class="font-mono">connect</code> statements in <code class="font-mono">Test</code> wire these components edge to edge.
+    </figcaption>
+  </figure>
+
+  <h2 class="text-xl font-semibold text-text mb-3">Key Modelica concepts</h2>
+  <ul class="list-disc list-inside text-text-muted leading-relaxed space-y-2 mb-6">
+    <li><strong class="text-text">connector Pin</strong> &mdash; defines an electrical interface with voltage (across variable) and current (<code class="font-mono text-sm text-accent">flow</code> variable). Kirchhoff&rsquo;s current law is enforced automatically at every connection point.</li>
+    <li><strong class="text-text">extends TwoPin</strong> &mdash; Resistor, Capacitor, and VoltageSource all inherit the two-pin interface, avoiding duplicated boilerplate.</li>
+    <li><strong class="text-text">connect(a, b)</strong> &mdash; equates across variables and sums flow variables. The topology of your circuit is declared, not hand-wired with equations.</li>
+  </ul>
+
+  <ModelWorkbench
+    client:only="react"
+    initialSource={`package Circuit
+
+connector Pin
+  Real v "voltage";
+  flow Real i "current";
+end Pin;
+
+model TwoPin
+  Pin p, n;
+  Real v;
+  Real i;
+equation
+  v = p.v - n.v;
+  i = p.i;
+  p.i + n.i = 0;
+end TwoPin;
+
+model Ground
+  Pin p;
+equation
+  p.v = 0;
+end Ground;
+
+model VoltageSource
+  extends TwoPin;
+  parameter Real V = 5.0 "V";
+equation
+  v = V;
+end VoltageSource;
+
+model Resistor
+  extends TwoPin;
+  parameter Real R = 2.5 "Resistance";
+equation
+  v = R * i;
+end Resistor;
+
+model Capacitor
+  extends TwoPin;
+  parameter Real C = 1e-2 "Capacitance";
+equation
+  i = C * der(v);
+end Capacitor;
+
+model Test
+  VoltageSource src;
+  Ground gnd;
+  Resistor res;
+  Capacitor cap;
+equation
+  connect(src.p, res.p);
+  connect(res.n, cap.p);
+  connect(cap.n, src.n);
+  connect(src.n, gnd.p);
+end Test;
+
+end Circuit;`}
+    modelName="Circuit.Test"
+    tEnd={0.1}
+  />
+
+  <h2 class="text-xl font-semibold text-text mt-10 mb-3">Things to try</h2>
+  <ul class="list-disc list-inside text-text-muted leading-relaxed space-y-2">
+    <li>Change the resistance <code class="font-mono text-sm text-accent">R = 2.5</code> to a smaller value and watch the capacitor charge faster.</li>
+    <li>Add an inductor component modeled after the Resistor (hint: <code class="font-mono text-sm text-accent">v = L * der(i)</code>) and wire it in series to build a full RLC circuit.</li>
+    <li>Try adding a second resistor in parallel with the capacitor &mdash; you only need a new instance and two <code class="font-mono text-sm text-accent">connect</code> statements.</li>
+    <li>Notice how the flat RLC model from the previous tutorial and this component model produce equivalent results &mdash; the component approach scales better to complex systems.</li>
+  </ul>
+</TutorialLayout>

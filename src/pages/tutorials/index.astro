@@ -1,0 +1,103 @@
+---
+import TutorialLayout from '../../layouts/TutorialLayout.astro';
+
+const cardClass = "group p-5 rounded-xl bg-surface border border-border hover:border-accent/40 transition-colors";
+const cardTitleClass = "font-semibold text-text group-hover:text-accent transition-colors";
+const cardDescClass = "text-sm text-text-muted mt-1";
+---
+
+<TutorialLayout
+  title="Tutorials"
+  breadcrumbs={[
+    { label: 'Tutorials' },
+  ]}
+>
+  <p class="text-text-muted text-lg mb-12 leading-relaxed">
+    A progressive learning path showcasing Rumoca's features, from your first Modelica model to model predictive control for a drone.
+    Each tutorial builds on the last, and they all run in your browser via WebAssembly.
+  </p>
+
+  <div class="space-y-12">
+    <section>
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-xs font-bold text-accent bg-accent/10 px-2 py-0.5 rounded">1</span>
+        <a href="/tutorials/getting-started" class="text-2xl font-semibold text-text hover:text-accent transition-colors">Getting Started</a>
+      </div>
+      <p class="text-text-muted mb-6">Write Modelica, compile, simulate, and plot &mdash; the full workflow from the start.</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <a href="/tutorials/getting-started/first-model" class={cardClass}>
+          <h3 class={cardTitleClass}>Your First Model</h3>
+          <p class={cardDescClass}>The simplest second-order ODE. Constant acceleration.</p>
+        </a>
+        <a href="/tutorials/getting-started/mass-spring-damper" class={cardClass}>
+          <h3 class={cardTitleClass}>Mass-Spring-Damper</h3>
+          <p class={cardDescClass}>Linear second-order ODE. Compare compilation backends.</p>
+        </a>
+        <a href="/tutorials/getting-started/bouncing-ball" class={cardClass}>
+          <h3 class={cardTitleClass}>Bouncing Ball</h3>
+          <p class={cardDescClass}>Event handling with <code class="font-mono text-xs">when</code> clauses.</p>
+        </a>
+        <a href="/tutorials/getting-started/van-der-pol" class={cardClass}>
+          <h3 class={cardTitleClass}>Van der Pol Oscillator</h3>
+          <p class={cardDescClass}>Limit cycles and solver settings.</p>
+        </a>
+        <a href="/tutorials/getting-started/series-rlc" class={cardClass}>
+          <h3 class={cardTitleClass}>Series RLC Circuit</h3>
+          <p class={cardDescClass}>Underdamped oscillation. Parameter exploration.</p>
+        </a>
+        <a href="/tutorials/getting-started/circuit-components" class={cardClass}>
+          <h3 class={cardTitleClass}>Circuit Components</h3>
+          <p class={cardDescClass}>Component-based Modelica with connectors and inheritance.</p>
+        </a>
+      </div>
+    </section>
+
+    <section>
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-xs font-bold text-accent bg-accent/10 px-2 py-0.5 rounded">2</span>
+        <a href="/tutorials/visualization" class="text-2xl font-semibold text-text hover:text-accent transition-colors">3D Visualization</a>
+      </div>
+      <p class="text-text-muted mb-6">Bring your models to life with interactive Three.js scenes.</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <a href="/tutorials/visualization/bouncing-ball-3d" class={cardClass}>
+          <h3 class={cardTitleClass}>Bouncing Ball 3D</h3>
+          <p class={cardDescClass}>Your first 3D viewer. The <code class="font-mono text-xs">onInit</code>/<code class="font-mono text-xs">onFrame</code> API.</p>
+        </a>
+        <a href="/tutorials/visualization/two-body-orbit" class={cardClass}>
+          <h3 class={cardTitleClass}>Two-Body Orbit</h3>
+          <p class={cardDescClass}>Orbital mechanics with trail rendering.</p>
+        </a>
+        <a href="/tutorials/visualization/pendulum" class={cardClass}>
+          <h3 class={cardTitleClass}>Pendulum</h3>
+          <p class={cardDescClass}>Nonlinear pendulum dynamics with 3D visualization.</p>
+        </a>
+      </div>
+    </section>
+
+    <section>
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-xs font-bold text-accent bg-accent/10 px-2 py-0.5 rounded">3</span>
+        <a href="/tutorials/workflows" class="text-2xl font-semibold text-text hover:text-accent transition-colors">Code Generation Workflows</a>
+      </div>
+      <p class="text-text-muted mb-6">Take a Modelica model into a downstream Python ecosystem &mdash; gradient-based fitting, symbolic analysis, optimization, or on-manifold estimation &mdash; via the code Rumoca generates. Each tutorial embeds a Jupyter notebook you can open in Google Colab.</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <a href="/tutorials/workflows/jax-paramid" class={cardClass}>
+          <h3 class={cardTitleClass}>Parameter Identification with JAX</h3>
+          <p class={cardDescClass}>Fit physical parameters by gradient descent through a differentiable rollout.</p>
+        </a>
+        <a href="/tutorials/workflows/sympy-linearize" class={cardClass}>
+          <h3 class={cardTitleClass}>Symbolic Linearization with SymPy</h3>
+          <p class={cardDescClass}>Differentiate the model algebraically to closed-form <code class="font-mono text-xs">A</code>, <code class="font-mono text-xs">B</code>.</p>
+        </a>
+        <a href="/tutorials/workflows/casadi-perch" class={cardClass}>
+          <h3 class={cardTitleClass}>Nonlinear MPC with CasADi</h3>
+          <p class={cardDescClass}>Direct-transcription MPC solved with IPOPT, flown through an aggressive fixed-wing maneuver.</p>
+        </a>
+        <a href="/tutorials/workflows/symforce-ekf" class={cardClass}>
+          <h3 class={cardTitleClass}>On-Manifold EKF with SymForce</h3>
+          <p class={cardDescClass}>IMU + GPS attitude estimator built on <em>SO(3)</em> rather than Euler angles.</p>
+        </a>
+      </div>
+    </section>
+  </div>
+</TutorialLayout>

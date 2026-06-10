@@ -1,0 +1,73 @@
+---
+import TutorialLayout from '../../../layouts/TutorialLayout.astro';
+import ModelWorkbench from '../../../components/tutorials/ModelWorkbench';
+import MathBlock from '../../../components/common/MathBlock.astro';
+---
+
+<TutorialLayout
+  title="Your First Model"
+  breadcrumbs={[
+    { label: 'Tutorials', href: '/tutorials' },
+    { label: 'Getting Started', href: '/tutorials/getting-started' },
+    { label: 'Your First Model' },
+  ]}
+  next={{ label: 'Mass-Spring-Damper', href: '/tutorials/getting-started/mass-spring-damper' }}
+>
+  <div class="mb-6 p-4 rounded-lg border border-accent/20 bg-accent/5">
+    <h3 class="text-sm font-semibold text-accent mb-2">What you'll learn</h3>
+    <ul class="list-disc list-inside text-sm text-text-muted space-y-1">
+      <li>Simulation workflow: write Modelica, simulate, and plot results</li>
+      <li>How to read a second-order ODE in Modelica syntax</li>
+      <li>How to interact with the simulation workbench</li>
+    </ul>
+  </div>
+
+  <p class="text-text-muted leading-relaxed mb-4">
+    Welcome to Rumoca. In this tutorial you will write a Modelica model, simulate it, and explore the
+    results &mdash; all in your browser. No install required.
+  </p>
+
+  <p class="text-text-muted leading-relaxed mb-4">
+    We will start with the <strong class="text-text">double integrator</strong> &mdash; the simplest second-order
+    ODE. A constant acceleration <em>a</em> drives velocity <em>v</em>, which drives position <em>x</em>:
+  </p>
+
+  <MathBlock tex={`\\begin{aligned}
+\\frac{dx}{dt} &= v \\\\
+\\frac{dv}{dt} &= a
+\\end{aligned}`} />
+
+  <h2 class="text-xl font-semibold text-text mb-3">Try it</h2>
+  <p class="text-text-muted leading-relaxed mb-4">
+    The editor below contains a complete Modelica model. Click <strong class="text-text">Simulate</strong> to
+    run 5 seconds of integration. Toggle variables in the plot legend to explore the results.
+  </p>
+
+  <ModelWorkbench
+    client:only="react"
+    initialSource={`model DoubleIntegrator "Double integrator (constant acceleration)"
+  parameter Real a = 1.0 "Constant acceleration (m/s^2)";
+  Real x(start = 0.0) "Position (m)";
+  Real v(start = 0.0) "Velocity (m/s)";
+equation
+  der(x) = v;
+  der(v) = a;
+end DoubleIntegrator;`}
+    modelName="DoubleIntegrator"
+    tEnd={5}
+  />
+
+  <h2 class="text-xl font-semibold text-text mt-10 mb-3">What just happened?</h2>
+  <ol class="list-decimal list-inside text-text-muted leading-relaxed space-y-2 mb-6">
+    <li><strong class="text-text">Simulate</strong> &mdash; Rumoca parsed your Modelica source and integrated the ODE in your browser using WebAssembly. No server round-trip.</li>
+    <li><strong class="text-text">Plot</strong> &mdash; State trajectories are plotted over time. Position <em>x</em> grows quadratically; velocity <em>v</em> grows linearly.</li>
+  </ol>
+
+
+  <h2 class="text-xl font-semibold text-text mt-10 mb-3">Things to try</h2>
+  <ul class="list-disc list-inside text-text-muted leading-relaxed space-y-2 mb-6">
+    <li>Change the acceleration <code class="font-mono text-sm text-accent">a</code> to <code class="font-mono text-sm text-accent">-9.81</code> and re-simulate &mdash; you now have free-fall under gravity.</li>
+    <li>Give the ball an initial velocity by changing <code class="font-mono text-sm text-accent">v(start&nbsp;=&nbsp;0.0)</code> to <code class="font-mono text-sm text-accent">v(start&nbsp;=&nbsp;5.0)</code>.</li>
+    <li>Increase the simulation time to see how the trajectories extend.</li>
+  </ul>
+</TutorialLayout>

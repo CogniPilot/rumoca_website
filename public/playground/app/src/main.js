@@ -4191,7 +4191,7 @@ function updateSourceBreadcrumbs() {
 // Web Worker setup (cache-busted to avoid stale JS/WASM bundles during local iteration)
 const workerCacheBust = String(Date.now());
 const wasmUrlParams = new URLSearchParams(window.location.search);
-const defaultWasmPkgBase = window.rumocaWasmPkgBase || '../../pkg';
+const defaultWasmPkgBase = window.rumocaWasmPkgBase ?? '../../pkg';
 const defaultWasmPkgSubdir = window.rumocaWasmPkgSubdir || 'release-full-web';
 const wasmPkgSubdir = wasmUrlParams.get('smoke_pkg_subdir') || defaultWasmPkgSubdir;
 const workerUrl = new URL(`${defaultWasmPkgBase}/${wasmPkgSubdir}/rumoca_worker.js`, window.location.href);

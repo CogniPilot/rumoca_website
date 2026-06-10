@@ -277,6 +277,15 @@ if [ -d "$PLAYGROUND_SRC" ]; then
             -e "s|window.rumocaWasmPkgSubdir = 'release-full-web';|window.rumocaWasmPkgSubdir = 'wasm';|" \
             "$PLAYGROUND_DST/index.html"
     fi
+    # main.js reads the base with `|| '../../pkg'`, which discards the empty-string
+    # "site root" base set above (|| treats '' as falsy) and falls back to a
+    # non-existent /pkg/ dir. Use ?? so the override is honored → worker loads
+    # from /wasm/. (Without this, the playground can't start the WASM worker.)
+    if [ -f "$PLAYGROUND_DST/src/main.js" ]; then
+        sed -i \
+            -e "s@window.rumocaWasmPkgBase || '../../pkg'@window.rumocaWasmPkgBase ?? '../../pkg'@" \
+            "$PLAYGROUND_DST/src/main.js"
+    fi
     count=$(find "$PLAYGROUND_DST" -type f | wc -l)
     echo "  ✓ playground → public/playground ($count file(s), WASM paths → /wasm/)"
 else

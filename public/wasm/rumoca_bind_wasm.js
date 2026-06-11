@@ -1,6 +1,162 @@
 /* @ts-self-types="./rumoca_bind_wasm.d.ts" */
 
 /**
+ * Opaque handle to a realtime interactive simulation running entirely in the
+ * browser. Created from a Modelica source + a `rum.toml` scenario, then driven
+ * one animation frame at a time via [`WasmInteractiveSession::tick`].
+ */
+export class WasmInteractiveSession {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmInteractiveSessionFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasminteractivesession_free(ptr, 0);
+    }
+    /**
+     * Fixed simulation timestep (seconds) from the scenario `[sim] dt`.
+     * @returns {number}
+     */
+    dt() {
+        const ret = wasm.wasminteractivesession_dt(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Read a single model variable by name.
+     * @param {string} name
+     * @returns {number | undefined}
+     */
+    get(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasminteractivesession_get(this.__wbg_ptr, ptr0, len0);
+        return ret[0] === 0 ? undefined : ret[1];
+    }
+    /**
+     * All model input names the stepper accepts, as a JSON array string.
+     * @returns {string}
+     */
+    input_names() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasminteractivesession_input_names(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Compile `source` and build an interactive session from a `rum.toml`
+     * `scenario`. The model class is taken from the scenario's `[model] name`.
+     *
+     * Any library packages the model depends on must already be loaded into the
+     * wasm session (via the source-root / project-sources APIs) before calling
+     * this, exactly as the playground does for batch simulation.
+     * @param {string} source
+     * @param {string} scenario_toml
+     */
+    constructor(source, scenario_toml) {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(scenario_toml, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasminteractivesession_new(ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        this.__wbg_ptr = ret[0] >>> 0;
+        WasmInteractiveSessionFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * Reset both the integrator and the input engine to initial conditions.
+     */
+    reset() {
+        const ret = wasm.wasminteractivesession_reset(this.__wbg_ptr);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Consume the pending quit request (set when the user presses a key bound
+     * to `action = "signal"`, `signal = "quit"`). The page stops the animation
+     * loop when this returns `true`.
+     * @returns {boolean}
+     */
+    take_quit() {
+        const ret = wasm.wasminteractivesession_take_quit(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Advance one frame.
+     *
+     * `input_json` is `{ "keys": [{code,key,pressed,shift,ctrl,alt}, ...],
+     * "gamepad": { "axes": [..], "buttons": [..] } | null }`. `frame_dt` is the
+     * real elapsed time for this animation frame (seconds); it is clamped and
+     * split into bounded physics sub-steps. `wall_ms` is a wall-clock
+     * millisecond timestamp (e.g. `Date.now()`) exposed to `runtime:wall_ms`
+     * signals.
+     *
+     * Returns the `[signals.viewer]` JSON object the scene script renders.
+     * @param {string} input_json
+     * @param {number} frame_dt
+     * @param {number} wall_ms
+     * @returns {string}
+     */
+    tick(input_json, frame_dt, wall_ms) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(input_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasminteractivesession_tick(this.__wbg_ptr, ptr0, len0, frame_dt, wall_ms);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Current simulation time (seconds).
+     * @returns {number}
+     */
+    time() {
+        const ret = wasm.wasminteractivesession_time(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * All solver variable names, as a JSON array string.
+     * @returns {string}
+     */
+    variable_names() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasminteractivesession_variable_names(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) WasmInteractiveSession.prototype[Symbol.dispose] = WasmInteractiveSession.prototype.free;
+
+/**
  * Opaque handle to a real-time simulation stepper running in WASM.
  *
  * Compiles a Modelica model and creates an interactive stepper that can be
@@ -50,9 +206,10 @@ export class WasmStepper {
      * `source` is the full Modelica source text, `model_name` is the class to
      * simulate. `solver` is an optional string accepted by
      * [`SimSolverMode::from_external_name`] — common values are `"bdf"`,
-     * `"rk-like"`, or `"auto"`. When omitted, BDF is used (the previous
-     * behavior). For DAEs whose initial Jacobian trips BDF's sparse-LU,
-     * pass `"rk-like"` to match what the CLI uses for the same model.
+     * `"rk-like"`, or `"auto"`. When omitted, `"auto"` is used: BDF where the
+     * diffsol backend is compiled in, otherwise the RK-like solver (e.g. the
+     * `full-web` playground bundle). For DAEs whose initial Jacobian trips
+     * BDF's sparse-LU, pass `"rk-like"` to match what the CLI uses.
      * @param {string} source
      * @param {string} model_name
      * @param {string | null} [solver]
@@ -1224,6 +1381,9 @@ function __wbg_get_imports() {
     };
 }
 
+const WasmInteractiveSessionFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasminteractivesession_free(ptr >>> 0, 1));
 const WasmStepperFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmstepper_free(ptr >>> 0, 1));

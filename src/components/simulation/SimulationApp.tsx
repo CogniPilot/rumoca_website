@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import RealTimeViewer from './RealTimeViewer';
 import HUD from './HUD';
 import FlightHud from './FlightHud';
+import RoverHud from './RoverHud';
 import ControlsHelp from './ControlsHelp';
 import ConfigPanel, { type EnvironmentType, type AircraftType } from './ConfigPanel';
 import { InputManager, type RCState, type InputMode } from '../../lib/input-manager';
@@ -57,7 +58,16 @@ const TRACKED_NAMES: Record<AircraftType, string[]> = {
   ],
   rover: [
     'x', 'y', 'theta', 'wheel_rpm', 'front_wheel_yaw',
+    'speed', 'gear_out', 'slip_deg', 'engine_rpm',
   ],
+};
+
+/** Terrain friction coefficient handed to the rover model per environment.
+ *  Lower μ → the rover loses grip and drifts sooner. */
+const MU_BY_ENV: Record<EnvironmentType, number> = {
+  desert: 0.9,  // dry sand — high grip
+  forest: 0.7,  // dirt / grass
+  arctic: 0.35, // snow / ice — slides
 };
 
 function getModelConfig(aircraft: AircraftType): {
@@ -76,20 +86,24 @@ function getModelConfig(aircraft: AircraftType): {
 
 function applyInputs(
   source: SimulationSource,
-  rc: RCState,
+  input: InputManager,
   aircraft: AircraftType,
-  armed: boolean,
+  mu: number,
 ) {
+  const rc = input.rc;
   if (aircraft === 'rover') {
-    source.setInput('throttle', rc.throttle);
+    source.setInput('throttle', rc.throttle); // gas (+) / brake (-)
     source.setInput('steering', rc.roll);
+    source.setInput('shift_up', input.shiftUp);
+    source.setInput('shift_down', input.shiftDown);
+    source.setInput('mu', mu);
     return;
   }
   source.setInput('stick_roll', rc.roll);
   source.setInput('stick_pitch', rc.pitch);
   source.setInput('stick_yaw', rc.yaw);
   source.setInput('stick_throttle', rc.throttle);
-  source.setInput('armed', armed ? 1.0 : 0.0);
+  source.setInput('armed', input.armed ? 1.0 : 0.0);
 }
 
 function getCameraTarget(source: SimulationSource, aircraft: AircraftType): THREE.Vector3 {
@@ -122,7 +136,12 @@ function getCameraTarget(source: SimulationSource, aircraft: AircraftType): THRE
  *  (matches the rumoca quadrotor scene) — otherwise the camera swings to the
  *  side whenever the quad pitches to translate. */
 function getVehicleHeading(source: SimulationSource, aircraft: AircraftType): number | null {
-  if (aircraft === 'rover') return null;
+  if (aircraft === 'rover') {
+    // Rover forward (body +X) maps to three (cos θ, sin θ) in (x,z); the chase
+    // azimuth that sits the camera behind it is atan2(forward.x, forward.z).
+    const theta = source.get('theta') ?? 0;
+    return Math.atan2(Math.cos(theta), Math.sin(theta));
+  }
   const q0 = source.get('quat[1]') ?? 1;
   const q1 = source.get('quat[2]') ?? 0;
   const q2 = source.get('quat[3]') ?? 0;
@@ -193,6 +212,8 @@ export default function SimulationApp() {
 
   const aircraftTypeRef = useRef(aircraftType);
   aircraftTypeRef.current = aircraftType;
+  const environmentRef = useRef(environment);
+  environmentRef.current = environment;
 
   const clearScene = useCallback(() => {
     const scene = sceneRef.current;
@@ -297,7 +318,7 @@ export default function SimulationApp() {
         camTargetRef.current.copy(reset.target);
       }
 
-      applyInputs(source, input.rc, aircraftTypeRef.current, input.armed);
+      applyInputs(source, input, aircraftTypeRef.current, MU_BY_ENV[environmentRef.current]);
       // Worker steps internally; no source.step() needed.
 
       aircraft.update(source, 0.016);
@@ -309,12 +330,24 @@ export default function SimulationApp() {
 
       const target = camTargetRef.current;
       target.copy(getCameraTarget(source, aircraftTypeRef.current));
+
+      // Gamepad d-pad orbits the camera. The azimuth change only persists with
+      // HUD view off; with it on, the chase-cam lock below overrides it.
+      const ORBIT_STEP = 0.03;
+      if (input.viewAzimuth) camAngleRef.current -= input.viewAzimuth * ORBIT_STEP;
+      if (input.viewElevation) {
+        camElevRef.current = Math.max(
+          -1.2,
+          Math.min(1.5, camElevRef.current + input.viewElevation * ORBIT_STEP),
+        );
+      }
+
       const dist = camDistRef.current;
       const elev = camElevRef.current;
       // HUD view locks the azimuth behind the vehicle (chase cam); otherwise the
       // mouse-controlled angle lets the user orbit freely.
       let angle = camAngleRef.current;
-      if (input.hudVisible && aircraftTypeRef.current !== 'rover') {
+      if (input.hudVisible) {
         const heading = getVehicleHeading(source, aircraftTypeRef.current);
         if (heading != null) {
           angle = heading + Math.PI;
@@ -526,6 +559,9 @@ export default function SimulationApp() {
           aircraftType={aircraftType}
         />
       )}
+      {aircraftType === 'rover' && (
+        <RoverHud visible={hudVisible} sourceRef={sourceRef} inputRef={inputRef} />
+      )}
       <ControlsHelp inputMode={inputMode} profile={aircraftType} />
       <button
         onClick={handleStop}
@@ -549,7 +585,7 @@ export default function SimulationApp() {
       >
         ← Setup
       </button>
-      {aircraftType !== 'rover' && (
+      {(
         <button
           onClick={() => {
             const input = inputRef.current;
@@ -574,9 +610,13 @@ export default function SimulationApp() {
             zIndex: 12,
             whiteSpace: 'nowrap',
           }}
-          title="Toggle HUD view: chase camera locked behind the vehicle (on) vs. free orbit (off). Shortcut: H"
+          title={
+            aircraftType === 'rover'
+              ? 'Toggle cockpit HUD (speedometer, gear, steering). Shortcut: H'
+              : 'Toggle HUD view: chase camera locked behind the vehicle (on) vs. free orbit (off). Shortcut: H'
+          }
         >
-          HUD view: {hudVisible ? 'ON' : 'OFF'}
+          {aircraftType === 'rover' ? 'Cockpit' : 'HUD view'}: {hudVisible ? 'ON' : 'OFF'}
         </button>
       )}
       <button

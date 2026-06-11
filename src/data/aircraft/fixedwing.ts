@@ -96,6 +96,31 @@ export function createFixedWing(scene: THREE.Scene): AircraftRenderer {
     // transform), so rotating the pivot deflects the surface about its hinge.
     const byName: Record<string, THREE.Object3D> = {};
     model.traverse((o) => { byName[o.name] = o; });
+
+    // Asset fix: the airplane.glb's "Right" aileron/flap/wheel meshes were
+    // exported containing a redundant mirror copy of their left counterpart
+    // (mesh-local +X is the LEFT wing), which overlapped the real Left* meshes
+    // and showed two surfaces on the left wing. Clip each right mesh to its own
+    // half (keep X < 0). No-op once the GLB is re-exported correctly.
+    const clipToRightHalf = (mesh: THREE.Mesh) => {
+      const geo = mesh.geometry as THREE.BufferGeometry;
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+      const index = geo.getIndex();
+      const triCount = index ? index.count / 3 : pos.count / 3;
+      const kept: number[] = [];
+      for (let t = 0; t < triCount; t++) {
+        const a = index ? index.getX(t * 3) : t * 3;
+        const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+        const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+        if ((pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3 < 0) kept.push(a, b, c);
+      }
+      geo.setIndex(kept);
+    };
+    for (const name of ['RightAileron', 'RightFlap', 'RightWheel']) {
+      const m = byName[name] as THREE.Mesh | undefined;
+      if (m?.isMesh) clipToRightHalf(m);
+    }
+
     for (const r of RIG) {
       const pv = byName[r.pivot];
       const ms = byName[r.mesh];
@@ -167,15 +192,15 @@ export function createFixedWing(scene: THREE.Scene): AircraftRenderer {
       const rud = (source.get('rud_rad') ?? 0) * VIS;
       const thr = source.get('thr_out') ?? 0;
       if (Number.isFinite(ail)) {
-        // Negated so the ailerons deflect in the correct direction; the flap
-        // segment on each wing follows its aileron so the trailing edge is one.
-        setSurf('LeftAileronPivot', -ail);
-        setSurf('LeftFlapPivot', -ail);
-        setSurf('RightAileronPivot', -ail);
-        setSurf('RightFlapPivot', -ail);
+        // The flap segment on each wing follows its aileron so the trailing
+        // edge reads as one surface; left/right deflect opposite via RIG.sign.
+        setSurf('LeftAileronPivot', ail);
+        setSurf('LeftFlapPivot', ail);
+        setSurf('RightAileronPivot', ail);
+        setSurf('RightFlapPivot', ail);
       }
       if (Number.isFinite(elev)) setSurf('ElevatorPivot', elev);
-      if (Number.isFinite(rud)) setSurf('RudderPivot', -rud); // negated: correct yaw direction
+      if (Number.isFinite(rud)) setSurf('RudderPivot', rud);
       propSpin += 0.6 + thr * 5.0;
       setSurf('PropPivot', propSpin);
 

@@ -4,6 +4,7 @@ import type { InputManager } from '../../lib/input-manager';
 
 interface RoverHudProps {
   visible: boolean;
+  compact?: boolean;
   sourceRef: React.MutableRefObject<SimulationSource | null>;
   inputRef: React.MutableRefObject<InputManager | null>;
 }
@@ -87,6 +88,7 @@ function drawRoverHud(
   h: number,
   r: RoverReading,
   rc: { throttle: number; roll: number },
+  compact: boolean,
 ): void {
   ctx.clearRect(0, 0, w, h);
 
@@ -101,83 +103,94 @@ function drawRoverHud(
   };
 
   const cx = w / 2;
-  const cy = h - 52;
-  const R = 70;
+  // On mobile the joysticks own the bottom corners, so anchor the gauges at the
+  // top and drop the redundant steering wheel + throttle bar (the sticks show
+  // those). On desktop the cluster sits at the bottom like a dashboard.
+  const cy = compact ? 92 : h - 52;
+  const R = compact ? 54 : 70;
+  const dx = compact ? 102 : 135;
   const mph = Math.abs(r.speedMs) * 2.23694;
   const kmh = Math.abs(r.speedMs) * 3.6;
   const drifting = Math.abs(r.slipDeg) > 10;
 
+  const bigFont = compact ? 'bold 22px monospace' : 'bold 26px monospace';
+  const spdFont = compact ? 'bold 24px monospace' : 'bold 30px monospace';
+
   // ── Tachometer (left) ────────────────────────────────────────────────────
-  const tachCx = cx - 135;
+  const tachCx = cx - dx;
   drawGauge(ctx, tachCx, cy, R, r.rpm / RPM_MAX, r.rpm >= RPM_REDLINE ? RED : AMBER, RPM_REDLINE / RPM_MAX);
-  text(`${(r.rpm / 1000).toFixed(1)}`, tachCx, cy - 24, r.rpm >= RPM_REDLINE ? RED : AMBER, 'bold 26px monospace');
+  text(`${(r.rpm / 1000).toFixed(1)}`, tachCx, cy - 22, r.rpm >= RPM_REDLINE ? RED : AMBER, bigFont);
   text('x1000 rpm', tachCx, cy - 2, AMBER_DIM, '11px monospace');
 
   // ── Speedometer (right) — mph primary, km/h secondary ────────────────────
-  const spdCx = cx + 135;
+  const spdCx = cx + dx;
   drawGauge(ctx, spdCx, cy, R, mph / SPEED_MAX_MPH, drifting ? RED : AMBER);
-  text(`${Math.round(mph)}`, spdCx, cy - 26, AMBER, 'bold 30px monospace');
+  text(`${Math.round(mph)}`, spdCx, cy - 24, AMBER, spdFont);
   text('mph', spdCx, cy - 4, AMBER_DIM, '11px monospace');
   text(`${Math.round(kmh)} km/h`, spdCx, cy + 16, AMBER_DIM, '12px monospace');
 
   // ── Gear (center) ────────────────────────────────────────────────────────
-  const gy = cy - 14;
+  const gy = cy - 8;
   ctx.strokeStyle = AMBER_DIM;
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(cx - 24, gy - 28, 48, 56);
+  ctx.strokeRect(cx - 22, gy - 26, 44, 52);
   const gc = r.gear <= -1 ? RED : r.gear === 0 ? AMBER_DIM : GREEN;
-  text(gearLabel(r.gear), cx, gy, gc, 'bold 38px monospace');
-  text('R N 1 2 3', cx, gy + 40, AMBER_DIM, '11px monospace');
+  text(gearLabel(r.gear), cx, gy, gc, 'bold 34px monospace');
+  text('R N 1 2 3', cx, gy + 36, AMBER_DIM, '11px monospace');
 
-  // ── Steering wheel (above the gear) ──────────────────────────────────────
-  const sy = cy - 86;
-  const sr = 22;
-  ctx.save();
-  ctx.translate(cx, sy);
-  ctx.rotate(r.steer * 3.0);
-  ctx.strokeStyle = AMBER;
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(0, 0, sr, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(-sr, 0); ctx.lineTo(sr, 0);
-  ctx.moveTo(0, 0); ctx.lineTo(0, sr);
-  ctx.stroke();
-  ctx.restore();
+  if (!compact) {
+    // Steering wheel + throttle bar — desktop only; on touch the sticks show
+    // these, and they'd overlap the on-screen controls.
+    const sy = cy - 86;
+    const sr = 22;
+    ctx.save();
+    ctx.translate(cx, sy);
+    ctx.rotate(r.steer * 3.0);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, sr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-sr, 0); ctx.lineTo(sr, 0);
+    ctx.moveTo(0, 0); ctx.lineTo(0, sr);
+    ctx.stroke();
+    ctx.restore();
 
-  // ── Throttle / brake bar (bottom) ────────────────────────────────────────
-  const barW = 180;
-  const barX = cx - barW / 2;
-  const barY = h - 16;
-  ctx.fillStyle = AMBER_DIM;
-  ctx.fillRect(barX, barY, barW, 7);
-  const mid = barX + barW / 2;
-  if (rc.throttle >= 0) {
-    ctx.fillStyle = GREEN;
-    ctx.fillRect(mid, barY, (barW / 2) * rc.throttle, 7);
-  } else {
-    ctx.fillStyle = RED;
-    ctx.fillRect(mid + (barW / 2) * rc.throttle, barY, (barW / 2) * -rc.throttle, 7);
+    const barW = 180;
+    const barX = cx - barW / 2;
+    const barY = h - 16;
+    ctx.fillStyle = AMBER_DIM;
+    ctx.fillRect(barX, barY, barW, 7);
+    const mid = barX + barW / 2;
+    if (rc.throttle >= 0) {
+      ctx.fillStyle = GREEN;
+      ctx.fillRect(mid, barY, (barW / 2) * rc.throttle, 7);
+    } else {
+      ctx.fillStyle = RED;
+      ctx.fillRect(mid + (barW / 2) * rc.throttle, barY, (barW / 2) * -rc.throttle, 7);
+    }
+    ctx.fillStyle = AMBER;
+    ctx.fillRect(mid - 1, barY - 2, 2, 11);
+    text('BRAKE', barX - 8, barY + 3, AMBER_DIM, '10px monospace', 'right');
+    text('GAS', barX + barW + 8, barY + 3, AMBER_DIM, '10px monospace', 'left');
   }
-  ctx.fillStyle = AMBER;
-  ctx.fillRect(mid - 1, barY - 2, 2, 11);
-  text('BRAKE', barX - 8, barY + 3, AMBER_DIM, '10px monospace', 'right');
-  text('GAS', barX + barW + 8, barY + 3, AMBER_DIM, '10px monospace', 'left');
 
   // ── Drift indicator ──────────────────────────────────────────────────────
-  text(`SLIP ${r.slipDeg.toFixed(0)}°`, cx, cy + 18, drifting ? RED : AMBER_DIM, '12px monospace');
-  if (drifting) text('◄ DRIFT ►', cx, sy - 34, RED, 'bold 16px monospace');
+  text(`SLIP ${r.slipDeg.toFixed(0)}°`, cx, cy + R + 14, drifting ? RED : AMBER_DIM, '12px monospace');
+  if (drifting) text('◄ DRIFT ►', cx, compact ? cy + R + 32 : cy - 120, RED, 'bold 16px monospace');
 }
 
-export default function RoverHud({ visible, sourceRef, inputRef }: RoverHudProps) {
+export default function RoverHud({ visible, compact = false, sourceRef, inputRef }: RoverHudProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number>(0);
   const sourceProp = useRef(sourceRef);
   const inputProp = useRef(inputRef);
+  const compactRef = useRef(compact);
   sourceProp.current = sourceRef;
   inputProp.current = inputRef;
+  compactRef.current = compact;
 
   useEffect(() => {
     if (!visible) return;
@@ -214,7 +227,7 @@ export default function RoverHud({ visible, sourceRef, inputRef }: RoverHudProps
         steer: source.get('front_wheel_yaw') ?? 0,
       };
       const rc = input?.rc ?? { throttle: 0, roll: 0, pitch: 0, yaw: 0 };
-      drawRoverHud(ctx, canvas.clientWidth, canvas.clientHeight, reading, rc);
+      drawRoverHud(ctx, canvas.clientWidth, canvas.clientHeight, reading, rc, compactRef.current);
     };
     rafRef.current = requestAnimationFrame(tick);
 

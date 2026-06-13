@@ -5,6 +5,7 @@ import HUD from './HUD';
 import FlightHud from './FlightHud';
 import RoverHud from './RoverHud';
 import ControlsHelp from './ControlsHelp';
+import TouchControls from './TouchControls';
 import ConfigPanel, { type EnvironmentType, type AircraftType } from './ConfigPanel';
 import { InputManager, type RCState, type InputMode } from '../../lib/input-manager';
 import type { SimulationSource } from '../../lib/simulation-source';
@@ -181,6 +182,27 @@ function compileNote(ac: AircraftType): string {
 
 type CompileStatus = 'idle' | 'compiling' | 'running' | 'error';
 
+/** Viewport flags for responsive layout / touch controls. */
+function useViewport() {
+  const read = () => ({
+    isMobile: typeof window !== 'undefined' && window.innerWidth < 768,
+    isTouch:
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0),
+  });
+  const [v, setV] = useState(read);
+  useEffect(() => {
+    const on = () => setV(read());
+    window.addEventListener('resize', on);
+    window.addEventListener('orientationchange', on);
+    return () => {
+      window.removeEventListener('resize', on);
+      window.removeEventListener('orientationchange', on);
+    };
+  }, []);
+  return v;
+}
+
 export default function SimulationApp() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -214,6 +236,7 @@ export default function SimulationApp() {
   aircraftTypeRef.current = aircraftType;
   const environmentRef = useRef(environment);
   environmentRef.current = environment;
+  const { isMobile, isTouch } = useViewport();
 
   const clearScene = useCallback(() => {
     const scene = sceneRef.current;
@@ -419,10 +442,48 @@ export default function SimulationApp() {
         lastMouseRef.current = { x: e.clientX, y: e.clientY };
       };
 
+      // Touch: one finger orbits (background only — the virtual sticks capture
+      // their own touches), two fingers pinch-zoom.
+      let lastTouch = { x: 0, y: 0 };
+      let pinchDist = 0;
+      const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 1) {
+          draggingRef.current = true;
+          lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        } else if (e.touches.length === 2) {
+          draggingRef.current = false;
+          pinchDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY,
+          );
+        }
+      };
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 1 && draggingRef.current) {
+          const t = e.touches[0];
+          camAngleRef.current -= (t.clientX - lastTouch.x) * 0.005;
+          camElevRef.current = Math.max(-1.2, Math.min(1.5, camElevRef.current + (t.clientY - lastTouch.y) * 0.005));
+          lastTouch = { x: t.clientX, y: t.clientY };
+          e.preventDefault();
+        } else if (e.touches.length === 2) {
+          const d = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY,
+          );
+          camDistRef.current = Math.max(1, Math.min(40, camDistRef.current + (pinchDist - d) * 0.02));
+          pinchDist = d;
+          e.preventDefault();
+        }
+      };
+      const onTouchEnd = (e: TouchEvent) => { if (e.touches.length === 0) draggingRef.current = false; };
+
       el.addEventListener('wheel', onWheel);
       el.addEventListener('mousedown', onMouseDown);
       window.addEventListener('mouseup', onMouseUp);
       window.addEventListener('mousemove', onMouseMove);
+      el.addEventListener('touchstart', onTouchStart, { passive: false });
+      el.addEventListener('touchmove', onTouchMove, { passive: false });
+      el.addEventListener('touchend', onTouchEnd);
     }, 200);
     return () => clearInterval(checkInterval);
   }, [started]);
@@ -537,46 +598,51 @@ export default function SimulationApp() {
           )}
         </div>
       )}
-      <HUD
-        source={sourceRef.current}
-        rc={rc}
-        inputMode={inputMode}
-        status={aircraftLabel(aircraftType)}
-        armed={aircraftType === 'rover' ? undefined : armed}
-      />
+      {!isMobile && (
+        <HUD
+          source={sourceRef.current}
+          rc={rc}
+          inputMode={inputMode}
+          status={aircraftLabel(aircraftType)}
+          armed={aircraftType === 'rover' ? undefined : armed}
+        />
+      )}
       <ConfigPanel
         environment={environment}
         aircraft={aircraftType}
         onEnvironmentChange={setEnvironment}
         onAircraftChange={setAircraftType}
         loading={compileStatus === 'compiling'}
+        compact={isMobile}
       />
       {aircraftType !== 'rover' && (
         <FlightHud
           visible={hudVisible}
+          compact={isMobile}
           sourceRef={sourceRef}
           inputRef={inputRef}
           aircraftType={aircraftType}
         />
       )}
       {aircraftType === 'rover' && (
-        <RoverHud visible={hudVisible} sourceRef={sourceRef} inputRef={inputRef} />
+        <RoverHud visible={hudVisible} compact={isMobile} sourceRef={sourceRef} inputRef={inputRef} />
       )}
-      <ControlsHelp inputMode={inputMode} profile={aircraftType} />
+      {isTouch && <TouchControls profile={aircraftType} inputRef={inputRef} />}
+      {!isTouch && <ControlsHelp inputMode={inputMode} profile={aircraftType} />}
       <button
         onClick={handleStop}
         style={{
           position: 'absolute',
-          top: 76,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '4px 12px',
+          top: isMobile ? 10 : 76,
+          left: isMobile ? 8 : '50%',
+          transform: isMobile ? 'none' : 'translateX(-50%)',
+          padding: isMobile ? '8px 14px' : '4px 12px',
           background: 'rgba(30,20,10,0.75)',
           color: '#a89070',
           border: '1px solid rgba(200,160,80,0.2)',
           borderRadius: 6,
           fontFamily: 'monospace',
-          fontSize: 11,
+          fontSize: isMobile ? 13 : 11,
           cursor: 'pointer',
           backdropFilter: 'blur(4px)',
           zIndex: 12,
@@ -595,16 +661,16 @@ export default function SimulationApp() {
           }}
           style={{
             position: 'absolute',
-            top: 108,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '4px 12px',
+            top: isMobile ? 52 : 108,
+            left: isMobile ? 8 : '50%',
+            transform: isMobile ? 'none' : 'translateX(-50%)',
+            padding: isMobile ? '8px 14px' : '4px 12px',
             background: hudVisible ? 'rgba(94,255,190,0.16)' : 'rgba(30,20,10,0.75)',
             color: hudVisible ? 'rgba(94,255,190,0.92)' : '#a89070',
             border: `1px solid ${hudVisible ? 'rgba(94,255,190,0.5)' : 'rgba(200,160,80,0.2)'}`,
             borderRadius: 6,
             fontFamily: 'monospace',
-            fontSize: 11,
+            fontSize: isMobile ? 13 : 11,
             cursor: 'pointer',
             backdropFilter: 'blur(4px)',
             zIndex: 12,
@@ -701,9 +767,10 @@ function SetupView({
     ].join(' ');
 
   return (
-    <div className="w-full h-full flex items-center justify-center px-4 py-8 bg-bg overflow-y-auto">
-      <div className="w-full max-w-xl rounded-xl border border-border bg-surface p-8 shadow-sm">
-        <h1 className="text-2xl font-bold text-text mb-2">Choose a vehicle</h1>
+    <div className="w-full h-full overflow-y-auto bg-bg">
+      <div className="min-h-full flex items-center justify-center px-4 py-8">
+        <div className="w-full max-w-xl rounded-xl border border-border bg-surface p-6 sm:p-8 shadow-sm">
+          <h1 className="text-2xl font-bold text-text mb-2">Choose a vehicle</h1>
         <p className="text-text-muted text-sm leading-relaxed mb-8">
           The Modelica model compiles in a background worker when you press Start — the page stays
           responsive, and you can cancel by clicking any nav link. The closed-loop quadrotor and fixed
@@ -754,6 +821,7 @@ function SetupView({
           >
             Start Simulation →
           </button>
+          </div>
         </div>
       </div>
     </div>

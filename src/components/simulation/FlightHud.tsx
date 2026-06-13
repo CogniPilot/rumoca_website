@@ -5,6 +5,7 @@ import type { AircraftType } from './ConfigPanel';
 
 interface FlightHudProps {
   visible: boolean;
+  compact?: boolean;
   sourceRef: React.MutableRefObject<SimulationSource | null>;
   inputRef: React.MutableRefObject<InputManager | null>;
   aircraftType: AircraftType;
@@ -81,6 +82,7 @@ function drawFlightHud(
   h: number,
   reading: VehicleReading,
   rc: { throttle: number; roll: number; pitch: number; yaw: number },
+  compact: boolean,
 ): void {
   const { roll, pitch, altitude, speed } = reading;
   ctx.clearRect(0, 0, w, h);
@@ -177,16 +179,18 @@ function drawFlightHud(
   hudText(`SPD ${speed.toFixed(1)} m/s`, 34, cy - 40);
   hudText(`ROLL ${((roll * 180) / Math.PI).toFixed(1)}°`, 34, cy + 44);
   hudText(`PITCH ${((pitch * 180) / Math.PI).toFixed(1)}°`, w - 34, cy + 44, 'right');
+  // On mobile the on-screen sticks sit at the bottom, so put this readout up top.
   hudText(
     `AIL ${rc.roll.toFixed(2)}  ELE ${rc.pitch.toFixed(2)}  RUD ${rc.yaw.toFixed(2)}  THR ${rc.throttle.toFixed(2)}`,
     cx,
-    h - 44,
+    compact ? 116 : h - 44,
     'center',
   );
 }
 
 export default function FlightHud({
   visible,
+  compact = false,
   sourceRef,
   inputRef,
   aircraftType,
@@ -199,9 +203,11 @@ export default function FlightHud({
   const sourceProp = useRef(sourceRef);
   const inputProp = useRef(inputRef);
   const aircraftProp = useRef(aircraftType);
+  const compactProp = useRef(compact);
   sourceProp.current = sourceRef;
   inputProp.current = inputRef;
   aircraftProp.current = aircraftType;
+  compactProp.current = compact;
 
   useEffect(() => {
     if (!visible) return;
@@ -236,7 +242,7 @@ export default function FlightHud({
         return;
       }
       const rc = input?.rc ?? { throttle: 0, roll: 0, pitch: 0, yaw: 0 };
-      drawFlightHud(ctx, canvas.clientWidth, canvas.clientHeight, reading, rc);
+      drawFlightHud(ctx, canvas.clientWidth, canvas.clientHeight, reading, rc, compactProp.current);
     };
     rafRef.current = requestAnimationFrame(tick);
 

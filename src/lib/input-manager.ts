@@ -53,7 +53,7 @@ export interface RCState {
   yaw: number;
 }
 
-export type InputMode = 'keyboard' | 'gamepad';
+export type InputMode = 'keyboard' | 'gamepad' | 'touch';
 export type InputProfile = 'quadrotor' | 'fixedwing' | 'rover';
 
 function applyDeadzone(val: number, dz: number): number {
@@ -80,6 +80,11 @@ export class InputManager {
    *  guaranteed to step with the pulse high and see the edge. */
   shiftUp = 0;
   shiftDown = 0;
+  /** On-screen touch controls. When active (a virtual stick has been touched),
+   *  supersede the keyboard. Knob values are raw, up = +1, range [-1,1]. */
+  touchActive = false;
+  private touchL = { x: 0, y: 0 };
+  private touchR = { x: 0, y: 0 };
 
   private profile: InputProfile = 'quadrotor';
   private keys: Record<string, boolean> = {};
@@ -109,6 +114,7 @@ export class InputManager {
   constructor() {
     this.onKeyDown = (e: KeyboardEvent) => {
       this.keys[e.code] = true;
+      this.touchActive = false; // a real key press takes over from touch
       if (e.code === 'KeyR') this.resetRequested = true;
       if (e.code === 'KeyH' && !e.repeat) this.hudVisible = !this.hudVisible;
       // Rover manual gearbox: E shifts up, Q shifts down (rising edge only).
@@ -154,6 +160,47 @@ export class InputManager {
     this.zeroSticks();
     this.kbRoll = this.kbPitch = this.kbYaw = 0;
     this.kbThrottle = this.kbThrottleInput = 0;
+  }
+
+  // ─── Touch control API (called by on-screen <TouchControls>) ─────────────
+  /** Set a virtual stick's knob position. side 'L'|'R', x/y in [-1,1], up=+1. */
+  setTouchStick(side: 'L' | 'R', x: number, y: number): void {
+    if (side === 'L') { this.touchL.x = x; this.touchL.y = y; }
+    else { this.touchR.x = x; this.touchR.y = y; }
+    this.touchActive = true;
+  }
+  touchShiftUp(): void { this.shiftUpUntil = performance.now() + this.SHIFT_HOLD_MS; }
+  touchShiftDown(): void { this.shiftDownUntil = performance.now() + this.SHIFT_HOLD_MS; }
+  touchReset(): void { this.resetRequested = true; }
+  touchToggleHud(): void { this.hudVisible = !this.hudVisible; }
+  touchToggleArmed(): void {
+    if (!this.armed) { this.rc.throttle = 0; this.touchL.y = -1; }
+    this.armed = !this.armed;
+  }
+
+  /** Map the virtual-stick knobs onto rc, matching the gamepad sense. */
+  private applyTouch(): void {
+    const lx = this.touchL.x, ly = this.touchL.y;
+    const rx = this.touchR.x, ry = this.touchR.y;
+    if (this.profile === 'rover') {
+      this.rc.throttle = ry;   // right stick up = gas, down = brake
+      this.rc.roll = lx;       // left stick = steering
+      this.rc.pitch = 0;
+      this.rc.yaw = 0;
+      return;
+    }
+    // Flight: left stick vertical is a throttle lever (holds), bottom→0 top→1.
+    this.rc.throttle = Math.max(0, Math.min(1, (ly + 1) / 2));
+    if (this.profile === 'fixedwing') {
+      this.rc.roll = rx;
+      this.rc.pitch = -ry;   // stick up (ry>0) = nose down, matching gamepad
+      this.rc.yaw = -lx;
+    } else {
+      // Quadrotor: drone.glb nose +Y rotates roll/pitch 90° (see gamepad path).
+      this.rc.roll = ry;
+      this.rc.pitch = -rx;
+      this.rc.yaw = lx;
+    }
   }
 
   private updateGamepad(dt: number): boolean {
@@ -244,6 +291,12 @@ export class InputManager {
 
     if (gamepadActive) {
       this.inputMode = 'gamepad';
+      return;
+    }
+
+    if (this.touchActive) {
+      this.inputMode = 'touch';
+      this.applyTouch();
       return;
     }
 

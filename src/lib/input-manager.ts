@@ -90,6 +90,10 @@ export class InputManager {
   private keys: Record<string, boolean> = {};
   private gamepadIndex: number | null = null;
   private readonly DZ = 0.12;
+  /** Expo (cubic) softening for the on-screen quad sticks — tiny touch nudges
+   *  near center are easy to make but map to small rate commands, while full
+   *  deflection still reaches ±1. 0 = linear, 1 = full cubic. */
+  private readonly TOUCH_EXPO = 0.7;
   private prevStartPressed = false;
   private prevXPressed = false;
   private prevShiftUpBtn = false;
@@ -178,28 +182,36 @@ export class InputManager {
     this.armed = !this.armed;
   }
 
-  /** Map the virtual-stick knobs onto rc, matching the gamepad sense. */
+  /** Map the virtual-stick knobs onto rc, matching the gamepad sense. The same
+   *  deadzone the physical sticks use (DZ) is applied so the on-screen sticks
+   *  share the gamepad's feel and min/max — no twitch near center, full ±1 at
+   *  the edge. */
   private applyTouch(): void {
+    const e = this.TOUCH_EXPO;
+    const dz = (v: number) => applyDeadzone(v, this.DZ);
+    const expo = (v: number) => e * v * v * v + (1 - e) * v;
     const lx = this.touchL.x, ly = this.touchL.y;
     const rx = this.touchR.x, ry = this.touchR.y;
     if (this.profile === 'rover') {
-      this.rc.throttle = ry;   // right stick up = gas, down = brake
-      this.rc.roll = lx;       // left stick = steering
+      this.rc.throttle = dz(ry); // right stick up = gas, down = brake
+      this.rc.roll = dz(lx);     // left stick = steering
       this.rc.pitch = 0;
       this.rc.yaw = 0;
       return;
     }
     // Flight: left stick vertical is a throttle lever (holds), bottom→0 top→1.
+    // It's an absolute position, not a rate, so it gets no deadzone.
     this.rc.throttle = Math.max(0, Math.min(1, (ly + 1) / 2));
     if (this.profile === 'fixedwing') {
-      this.rc.roll = rx;
-      this.rc.pitch = -ry;   // stick up (ry>0) = nose down, matching gamepad
-      this.rc.yaw = -lx;
+      this.rc.roll = dz(rx);
+      this.rc.pitch = -dz(ry);   // stick up (ry>0) = nose down, matching gamepad
+      this.rc.yaw = -dz(lx);
     } else {
       // Quadrotor: drone.glb nose +Y rotates roll/pitch 90° (see gamepad path).
-      this.rc.roll = ry;
-      this.rc.pitch = -rx;
-      this.rc.yaw = lx;
+      // Expo softens the touch sticks — acro/rate mode is otherwise too twitchy.
+      this.rc.roll = expo(dz(ry));
+      this.rc.pitch = -expo(dz(rx));
+      this.rc.yaw = -expo(dz(lx));
     }
   }
 
@@ -235,7 +247,7 @@ export class InputManager {
         // vehicle translates the way the stick points.
         this.rc.roll = -ry;
         this.rc.pitch = -rx;
-        this.rc.yaw = yawAxis;
+        this.rc.yaw = -yawAxis; // quad yaw reads reversed — negate to match real heading
       }
       const throttleInput = -applyDeadzone(gp.axes[1] ?? 0, this.DZ);
       this.rc.throttle = Math.max(

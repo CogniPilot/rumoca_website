@@ -238,6 +238,28 @@ export default function SimulationApp() {
   environmentRef.current = environment;
   const { isMobile, isTouch } = useViewport();
 
+  // Fullscreen API (Android Chrome). iOS Safari lacks requestFullscreen for
+  // elements — the optional chaining no-ops there; iOS users go fullscreen via
+  // "Add to Home Screen" (display:fullscreen in the manifest) instead.
+  const [isFs, setIsFs] = useState(false);
+  useEffect(() => {
+    const on = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const toggleFullscreen = useCallback(() => {
+    // Fullscreen the sim container, not the document — the navbar lives outside
+    // it, so it's excluded rather than carried into fullscreen.
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else rootRef.current?.requestFullscreen?.().catch(() => {});
+  }, []);
+
+  // Use the compact, decluttered layout on phones AND whenever fullscreen —
+  // fullscreen survives an orientation change that would otherwise push the
+  // width past the mobile breakpoint and bring the big panels back.
+  const compact = isMobile || isFs;
+
   const clearScene = useCallback(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -517,7 +539,7 @@ export default function SimulationApp() {
 
   // ─── Simulation view ─────────────────────────────────────────────────────
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div ref={rootRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#0c0f12' }}>
       <style>{`
         @keyframes sim-spin { to { transform: rotate(360deg); } }
       `}</style>
@@ -598,7 +620,7 @@ export default function SimulationApp() {
           )}
         </div>
       )}
-      {!isMobile && (
+      {!compact && (
         <HUD
           source={sourceRef.current}
           rc={rc}
@@ -613,19 +635,19 @@ export default function SimulationApp() {
         onEnvironmentChange={setEnvironment}
         onAircraftChange={setAircraftType}
         loading={compileStatus === 'compiling'}
-        compact={isMobile}
+        compact={compact}
       />
       {aircraftType !== 'rover' && (
         <FlightHud
           visible={hudVisible}
-          compact={isMobile}
+          compact={compact}
           sourceRef={sourceRef}
           inputRef={inputRef}
           aircraftType={aircraftType}
         />
       )}
       {aircraftType === 'rover' && (
-        <RoverHud visible={hudVisible} compact={isMobile} sourceRef={sourceRef} inputRef={inputRef} />
+        <RoverHud visible={hudVisible} compact={compact} sourceRef={sourceRef} inputRef={inputRef} />
       )}
       {isTouch && <TouchControls profile={aircraftType} inputRef={inputRef} />}
       {!isTouch && <ControlsHelp inputMode={inputMode} profile={aircraftType} />}
@@ -633,16 +655,16 @@ export default function SimulationApp() {
         onClick={handleStop}
         style={{
           position: 'absolute',
-          top: isMobile ? 10 : 76,
-          left: isMobile ? 8 : '50%',
-          transform: isMobile ? 'none' : 'translateX(-50%)',
-          padding: isMobile ? '8px 14px' : '4px 12px',
+          top: compact ? 10 : 76,
+          left: compact ? 8 : '50%',
+          transform: compact ? 'none' : 'translateX(-50%)',
+          padding: compact ? '8px 14px' : '4px 12px',
           background: 'rgba(30,20,10,0.75)',
           color: '#a89070',
           border: '1px solid rgba(200,160,80,0.2)',
           borderRadius: 6,
           fontFamily: 'monospace',
-          fontSize: isMobile ? 13 : 11,
+          fontSize: compact ? 13 : 11,
           cursor: 'pointer',
           backdropFilter: 'blur(4px)',
           zIndex: 12,
@@ -661,10 +683,10 @@ export default function SimulationApp() {
           }}
           style={{
             position: 'absolute',
-            top: isMobile ? 52 : 108,
-            left: isMobile ? 8 : '50%',
-            transform: isMobile ? 'none' : 'translateX(-50%)',
-            padding: isMobile ? '8px 14px' : '4px 12px',
+            top: compact ? 52 : 108,
+            left: compact ? 8 : '50%',
+            transform: compact ? 'none' : 'translateX(-50%)',
+            padding: compact ? '8px 14px' : '4px 12px',
             background: hudVisible ? 'rgba(94,255,190,0.16)' : 'rgba(30,20,10,0.75)',
             color: hudVisible ? 'rgba(94,255,190,0.92)' : '#a89070',
             border: `1px solid ${hudVisible ? 'rgba(94,255,190,0.5)' : 'rgba(200,160,80,0.2)'}`,
@@ -683,6 +705,29 @@ export default function SimulationApp() {
           }
         >
           {aircraftType === 'rover' ? 'Cockpit' : 'HUD view'}: {hudVisible ? 'ON' : 'OFF'}
+        </button>
+      )}
+      {isTouch && typeof document !== 'undefined' && document.fullscreenEnabled && (
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            position: 'absolute',
+            top: 94,
+            left: 8,
+            padding: '8px 14px',
+            background: isFs ? 'rgba(94,255,190,0.16)' : 'rgba(30,20,10,0.75)',
+            color: isFs ? 'rgba(94,255,190,0.92)' : '#a89070',
+            border: `1px solid ${isFs ? 'rgba(94,255,190,0.5)' : 'rgba(200,160,80,0.2)'}`,
+            borderRadius: 6,
+            fontFamily: 'monospace',
+            fontSize: 13,
+            cursor: 'pointer',
+            backdropFilter: 'blur(4px)',
+            zIndex: 12,
+          }}
+          title="Toggle fullscreen"
+        >
+          {isFs ? '⛶ Exit' : '⛶ Full'}
         </button>
       )}
       <button

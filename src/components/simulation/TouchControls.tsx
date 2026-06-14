@@ -65,8 +65,8 @@ function Joystick({ side, selfCenterX, selfCenterY, label, onChange }: JoystickP
     <div
       style={{
         position: 'absolute',
-        bottom: 22,
-        [side]: 22,
+        bottom: 'calc(22px + env(safe-area-inset-bottom, 0px))',
+        [side]: `calc(22px + env(safe-area-inset-${side}, 0px))`,
         width: BASE,
         height: BASE,
         touchAction: 'none',
@@ -150,7 +150,7 @@ export default function TouchControls({ profile, inputRef }: TouchControlsProps)
 
       {/* Action buttons, bottom-center */}
       <div style={{
-        position: 'absolute', bottom: 26, left: '50%', transform: 'translateX(-50%)',
+        position: 'absolute', bottom: 'calc(26px + env(safe-area-inset-bottom, 0px))', left: '50%', transform: 'translateX(-50%)',
         display: 'flex', gap: 10, pointerEvents: 'none',
       }}>
         {rover ? (

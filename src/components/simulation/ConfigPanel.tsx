@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 export type EnvironmentType = 'desert' | 'forest' | 'arctic';
 export type AircraftType = 'quadrotor' | 'fixedwing' | 'rover';
 
@@ -7,6 +9,7 @@ interface ConfigPanelProps {
   onEnvironmentChange: (env: EnvironmentType) => void;
   onAircraftChange: (ac: AircraftType) => void;
   loading: boolean;
+  compact?: boolean;
 }
 
 const panelStyle: React.CSSProperties = {
@@ -84,11 +87,41 @@ export default function ConfigPanel({
   onEnvironmentChange,
   onAircraftChange,
   loading,
+  compact = false,
 }: ConfigPanelProps) {
+  const [open, setOpen] = useState(false);
+
+  // On mobile the panel collapses to a small ⚙ button to free up screen space.
+  if (compact && !open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        title="Configuration"
+        style={{
+          position: 'fixed', top: '10px', right: '8px', zIndex: 10,
+          width: 44, height: 44, borderRadius: 10,
+          background: 'rgba(30,20,10,0.8)', color: '#e8c840',
+          border: '1px solid rgba(200,160,80,0.35)', fontSize: 20,
+          backdropFilter: 'blur(6px)',
+        }}
+      >
+        ⚙
+      </button>
+    );
+  }
+
   return (
-    <div style={panelStyle}>
-      <div style={{ color: '#e8c840', fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>
-        Configuration
+    <div style={compact ? { ...panelStyle, top: '10px', right: '8px', minWidth: '150px' } : panelStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+        <span style={{ color: '#e8c840', fontWeight: 'bold', fontSize: '13px' }}>Configuration</span>
+        {compact && (
+          <button
+            onClick={() => setOpen(false)}
+            style={{ background: 'none', border: 'none', color: '#a89070', fontSize: 18, lineHeight: 1, cursor: 'pointer' }}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       <span style={labelStyle}>Environment</span>

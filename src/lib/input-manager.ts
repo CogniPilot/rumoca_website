@@ -22,19 +22,27 @@
  *    H            — toggle flight HUD
  *    R            — reset
  *
- *  Rover:
- *    ↑ / ↓        — throttle (set ±1.0 with decay; reverse allowed)
- *    ← / →        — steering (set ±1.0 with decay; routed via rc.roll)
+ *  Rover (manual gearbox; gear selects direction, throttle is gas/brake):
+ *    ↑ / ↓        — gas / brake (rover throttle, routed via rc.throttle)
+ *    ← / →        — steering (routed via rc.roll)
+ *    E / Q        — shift gear up / down (R ↔ N ↔ 1 ↔ 2 ↔ 3)
  *    H            — toggle flight HUD
  *    R            — reset
+ *    (to reverse: shift down into R, then press gas)
  *
- * Gamepad layout matches the rumoca convention:
- *    Right stick X/Y → roll / pitch
+ * Gamepad layout:
+ *    Right stick     → roll / pitch (the quadrotor's drone.glb nose is body
+ *                      +Y, so its stick→motion mapping is rotated 90°; the
+ *                      fixed wing uses plain joystick sense, stick forward =
+ *                      nose down)
  *    Left stick X    → yaw
  *    Left stick Y    → throttle (ramp)
+ *    D-pad           → orbit the camera view
  *    Start           → arm
  *    A (south)       → reset
  *    B (east)        → zero sticks
+ *    X (west)        → toggle HUD / chase view
+ *    RB / LB         → rover: shift gear up / down
  */
 
 export interface RCState {
@@ -45,7 +53,7 @@ export interface RCState {
   yaw: number;
 }
 
-export type InputMode = 'keyboard' | 'gamepad';
+export type InputMode = 'keyboard' | 'gamepad' | 'touch';
 export type InputProfile = 'quadrotor' | 'fixedwing' | 'rover';
 
 function applyDeadzone(val: number, dz: number): number {
@@ -64,12 +72,35 @@ export class InputManager {
   resetRequested = false;
   inputMode: InputMode = 'keyboard';
   hudVisible = true;
+  /** Gamepad d-pad camera-orbit intent (-1/0/1), consumed by SimulationApp. */
+  viewAzimuth = 0;
+  viewElevation = 0;
+  /** Rover manual gearbox shift pulses (1 while held briefly, else 0). The
+   *  Modelica model shifts on the rising edge; we hold ~90ms so the worker is
+   *  guaranteed to step with the pulse high and see the edge. */
+  shiftUp = 0;
+  shiftDown = 0;
+  /** On-screen touch controls. When active (a virtual stick has been touched),
+   *  supersede the keyboard. Knob values are raw, up = +1, range [-1,1]. */
+  touchActive = false;
+  private touchL = { x: 0, y: 0 };
+  private touchR = { x: 0, y: 0 };
 
   private profile: InputProfile = 'quadrotor';
   private keys: Record<string, boolean> = {};
   private gamepadIndex: number | null = null;
   private readonly DZ = 0.12;
+  /** Expo (cubic) softening for the on-screen quad sticks — tiny touch nudges
+   *  near center are easy to make but map to small rate commands, while full
+   *  deflection still reaches ±1. 0 = linear, 1 = full cubic. */
+  private readonly TOUCH_EXPO = 0.7;
   private prevStartPressed = false;
+  private prevXPressed = false;
+  private prevShiftUpBtn = false;
+  private prevShiftDownBtn = false;
+  private shiftUpUntil = 0;
+  private shiftDownUntil = 0;
+  private readonly SHIFT_HOLD_MS = 90;
   private prevHudKey = false;
   private lastUpdateTime = performance.now();
   // Internal keyboard stick state — decays toward 0 when keys release.
@@ -87,8 +118,12 @@ export class InputManager {
   constructor() {
     this.onKeyDown = (e: KeyboardEvent) => {
       this.keys[e.code] = true;
+      this.touchActive = false; // a real key press takes over from touch
       if (e.code === 'KeyR') this.resetRequested = true;
       if (e.code === 'KeyH' && !e.repeat) this.hudVisible = !this.hudVisible;
+      // Rover manual gearbox: E shifts up, Q shifts down (rising edge only).
+      if (e.code === 'KeyE' && !e.repeat) this.shiftUpUntil = performance.now() + this.SHIFT_HOLD_MS;
+      if (e.code === 'KeyQ' && !e.repeat) this.shiftDownUntil = performance.now() + this.SHIFT_HOLD_MS;
       if (e.code === 'Space' && !e.repeat) {
         // rumoca's TOML requires throttle ≤ 0.05 to arm; we drop that
         // interlock for the website sim so the toggle is never silently
@@ -131,6 +166,55 @@ export class InputManager {
     this.kbThrottle = this.kbThrottleInput = 0;
   }
 
+  // ─── Touch control API (called by on-screen <TouchControls>) ─────────────
+  /** Set a virtual stick's knob position. side 'L'|'R', x/y in [-1,1], up=+1. */
+  setTouchStick(side: 'L' | 'R', x: number, y: number): void {
+    if (side === 'L') { this.touchL.x = x; this.touchL.y = y; }
+    else { this.touchR.x = x; this.touchR.y = y; }
+    this.touchActive = true;
+  }
+  touchShiftUp(): void { this.shiftUpUntil = performance.now() + this.SHIFT_HOLD_MS; }
+  touchShiftDown(): void { this.shiftDownUntil = performance.now() + this.SHIFT_HOLD_MS; }
+  touchReset(): void { this.resetRequested = true; }
+  touchToggleHud(): void { this.hudVisible = !this.hudVisible; }
+  touchToggleArmed(): void {
+    if (!this.armed) { this.rc.throttle = 0; this.touchL.y = -1; }
+    this.armed = !this.armed;
+  }
+
+  /** Map the virtual-stick knobs onto rc, matching the gamepad sense. The same
+   *  deadzone the physical sticks use (DZ) is applied so the on-screen sticks
+   *  share the gamepad's feel and min/max — no twitch near center, full ±1 at
+   *  the edge. */
+  private applyTouch(): void {
+    const e = this.TOUCH_EXPO;
+    const dz = (v: number) => applyDeadzone(v, this.DZ);
+    const expo = (v: number) => e * v * v * v + (1 - e) * v;
+    const lx = this.touchL.x, ly = this.touchL.y;
+    const rx = this.touchR.x, ry = this.touchR.y;
+    if (this.profile === 'rover') {
+      this.rc.throttle = dz(ry); // right stick up = gas, down = brake
+      this.rc.roll = dz(lx);     // left stick = steering
+      this.rc.pitch = 0;
+      this.rc.yaw = 0;
+      return;
+    }
+    // Flight: left stick vertical is a throttle lever (holds), bottom→0 top→1.
+    // It's an absolute position, not a rate, so it gets no deadzone.
+    this.rc.throttle = Math.max(0, Math.min(1, (ly + 1) / 2));
+    if (this.profile === 'fixedwing') {
+      this.rc.roll = dz(rx);
+      this.rc.pitch = -dz(ry);   // stick up (ry>0) = nose down, matching gamepad
+      this.rc.yaw = -dz(lx);
+    } else {
+      // Quadrotor: drone.glb nose +Y rotates roll/pitch 90° (see gamepad path).
+      // Expo softens the touch sticks — acro/rate mode is otherwise too twitchy.
+      this.rc.roll = expo(dz(ry));
+      this.rc.pitch = -expo(dz(rx));
+      this.rc.yaw = -expo(dz(lx));
+    }
+  }
+
   private updateGamepad(dt: number): boolean {
     if (this.gamepadIndex === null) return false;
     const gamepads = navigator.getGamepads();
@@ -144,16 +228,53 @@ export class InputManager {
       this.rc.pitch = 0;
       this.rc.yaw = 0;
     } else {
-      // Quadrotor / fixed wing — rumoca convention.
-      this.rc.roll = applyDeadzone(gp.axes[2] ?? 0, this.DZ);
-      this.rc.pitch = -applyDeadzone(gp.axes[3] ?? 0, this.DZ);
-      this.rc.yaw = applyDeadzone(gp.axes[0] ?? 0, this.DZ);
+      // Quadrotor / fixed wing — right stick controls roll/pitch.
+      const rx = applyDeadzone(gp.axes[2] ?? 0, this.DZ); // right stick X (+ = right)
+      const ry = applyDeadzone(gp.axes[3] ?? 0, this.DZ); // right stick Y (+ = back)
+      const yawAxis = applyDeadzone(gp.axes[0] ?? 0, this.DZ); // left stick X (+ = right)
+      if (this.profile === 'fixedwing') {
+        // Joystick sense: stick right → roll right; stick forward (ry < 0)
+        // pitches the nose DOWN (negative pitch). Rudder is reversed relative
+        // to the quad so left stick right yaws the nose right.
+        this.rc.roll = rx;
+        this.rc.pitch = ry;
+        this.rc.yaw = -yawAxis;
+      } else {
+        // Quadrotor: the drone.glb's visual nose points along body +Y, so the
+        // model's roll/pitch axes are rotated 90° from the stick. Forward/back
+        // stick (ry) drives roll → forward/back translation; left/right stick
+        // (rx) drives pitch → left/right translation. Both negated so the
+        // vehicle translates the way the stick points.
+        this.rc.roll = -ry;
+        this.rc.pitch = -rx;
+        this.rc.yaw = -yawAxis; // quad yaw reads reversed — negate to match real heading
+      }
       const throttleInput = -applyDeadzone(gp.axes[1] ?? 0, this.DZ);
       this.rc.throttle = Math.max(
         0,
         Math.min(1, this.rc.throttle + throttleInput * THROTTLE_RAMP_RATE * dt),
       );
     }
+
+    // D-pad orbits the camera view (applied by SimulationApp); X (button 2)
+    // toggles the HUD/chase view.
+    const dUp = gp.buttons[12]?.pressed ?? false;
+    const dDown = gp.buttons[13]?.pressed ?? false;
+    const dLeft = gp.buttons[14]?.pressed ?? false;
+    const dRight = gp.buttons[15]?.pressed ?? false;
+    this.viewAzimuth = (dRight ? 1 : 0) - (dLeft ? 1 : 0);
+    this.viewElevation = (dUp ? 1 : 0) - (dDown ? 1 : 0);
+    const xPressed = gp.buttons[2]?.pressed ?? false;
+    if (xPressed && !this.prevXPressed) this.hudVisible = !this.hudVisible;
+    this.prevXPressed = xPressed;
+
+    // Rover manual gearbox: RB (5) shifts up, LB (4) shifts down (rising edge).
+    const rb = gp.buttons[5]?.pressed ?? false;
+    const lb = gp.buttons[4]?.pressed ?? false;
+    if (rb && !this.prevShiftUpBtn) this.shiftUpUntil = performance.now() + this.SHIFT_HOLD_MS;
+    if (lb && !this.prevShiftDownBtn) this.shiftDownUntil = performance.now() + this.SHIFT_HOLD_MS;
+    this.prevShiftUpBtn = rb;
+    this.prevShiftDownBtn = lb;
 
     if (gp.buttons[0]?.pressed) this.resetRequested = true;
     if (gp.buttons[1]?.pressed) this.zeroSticks();
@@ -171,8 +292,23 @@ export class InputManager {
     const dt = Math.min((now - this.lastUpdateTime) / 1000, 0.05);
     this.lastUpdateTime = now;
 
-    if (this.updateGamepad(dt)) {
+    this.viewAzimuth = 0;
+    this.viewElevation = 0;
+
+    const gamepadActive = this.updateGamepad(dt);
+
+    // Gear-shift pulses (timers set by keydown or gamepad bumpers above).
+    this.shiftUp = now < this.shiftUpUntil ? 1 : 0;
+    this.shiftDown = now < this.shiftDownUntil ? 1 : 0;
+
+    if (gamepadActive) {
       this.inputMode = 'gamepad';
+      return;
+    }
+
+    if (this.touchActive) {
+      this.inputMode = 'touch';
+      this.applyTouch();
       return;
     }
 

@@ -1,0 +1,25 @@
+{
+  "name": "Rumoca Simulation",
+  "short_name": "Rumoca",
+  "description": "Fly aircraft in real-time using Modelica physics running in your browser via WebAssembly.",
+  "start_url": "/simulation",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0c0f12",
+  "theme_color": "#0c0f12",
+  "icons": [
+    {
+      "src": "/images/rumoca.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/images/rumoca.png",
+      "sizes": "500x500",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

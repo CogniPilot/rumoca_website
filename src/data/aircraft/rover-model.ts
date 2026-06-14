@@ -4,78 +4,208 @@
 export const ROVER_MODEL_NAME = 'Rover';
 
 export const ROVER_MODEL = String.raw`
-// Kinematic bicycle model of an Ackermann-steered rover.
+// Dynamic single-track (bicycle) rover with a manual gearbox.
 //
-// States (5):
+// This replaces the old purely-kinematic rover. It is a HYBRID model:
+//   - continuous: planar rigid-body dynamics with tire side forces, so the
+//     vehicle can SLIDE / DRIFT when cornering demand exceeds tire grip
+//     (grip = mu * axle load, mu supplied per terrain by the host);
+//   - discrete: a MANUAL gearbox modeled as a discrete Integer state machine
+//     that the driver shifts up/down (when/elsewhen on pre(gear)).
+//
+// Continuous states (7):
 //   x, y    — world position [m]
-//   theta   — heading [rad] (0 = +X axis; CCW positive)
-//   v       — longitudinal speed along body frame [m/s]
-//   delta   — steering angle of front wheels [rad] (0 = straight)
+//   theta   — body heading [rad] (0 = +X, CCW positive). Under drift this is
+//             the BODY yaw, which differs from the travel direction.
+//   vx, vy  — body-frame longitudinal / lateral velocity [m/s]
+//   r       — yaw rate [rad/s] (= der(theta))
+//   delta   — front steering angle [rad] (first-order lag on the stick)
+// Discrete state (1):
+//   gear    — -1 = Reverse, 0 = Neutral, 1/2/3 = forward gears
 //
 // Inputs:
-//   throttle : [-1..1]  throttle → target speed
-//   steering    : [-1..1]  steering → target steering angle
+//   throttle   [-1..1]  accelerator (+) / brake (-), always in the gear's dir
+//   steering   [-1..1]  front-wheel steering command
+//   mu                  terrain friction coefficient (host: ~0.9 sand / 0.7
+//                       forest / 0.35 ice). Lower mu => slides/drifts sooner.
+//   shift_up            pulse > 0.5 shifts up one gear (rising-edge triggered)
+//   shift_down          pulse > 0.5 shifts down one gear
 //
-// Both commands pass through first-order lags so the vehicle doesn't
-// teleport its state on sudden stick moves, and so the front-wheel
-// visualization has smooth angular motion to track.
-//
-// Kinematics at the rear axle (standard bicycle model):
-//   der(x)     = v * cos(theta)
-//   der(y)     = v * sin(theta)
-//   der(theta) = v * tan(delta) / wheelbase
-//
-// The rover cannot sideslip — it follows the tangent of the front wheels
-// by construction, so there's no "skidding" failure mode of the old
-// differential-drive form.
+// Low-speed robustness: the dynamic bicycle is singular at vx = 0, so the tire
+// side forces are faded out by a speed activation s = tanh(|vx|/v_act) and the
+// yaw rate is relaxed toward the kinematic value r_kin = vx*tan(delta)/L at low
+// speed. Result: it steers normally when crawling and only drifts at speed.
 
 model Rover
 
-  // --- Geometry ---
-  // Sized to match the GLB jeep used by rover_scene.js at its viewer scale.
-  parameter Real wheelbase     = 0.62  "Axle-to-axle distance [m]";
-  parameter Real track         = 0.40  "Distance between left/right wheels [m]";
-  parameter Real wheel_radius  = 0.09  "Wheel radius [m]";
+  parameter Real pi = 3.14159265358979;
 
-  // --- Command mapping ---
-  parameter Real v_max      = 4.0   "Top forward speed [m/s] at full stick";
-  parameter Real delta_max  = 0.6   "Max steering angle [rad] (~34°)";
+  // --- Geometry (road-car scale; top gear ~ 80 mph) ---
+  parameter Real wheelbase    = 2.7  "Axle-to-axle distance [m]";
+  parameter Real a_cg         = 1.35 "CG to front axle [m]";
+  parameter Real b_cg         = 1.35 "CG to rear axle [m]";
+  parameter Real wheel_radius = 0.33 "Wheel radius [m]";
 
-  // --- First-order response time constants ---
-  parameter Real tau_speed  = 0.25 "Speed tracking time constant [s]";
-  parameter Real tau_steer  = 0.10 "Steering tracking time constant [s]";
+  // --- Inertia ---
+  parameter Real mass = 1300.0 "Vehicle mass [kg]";
+  parameter Real Iz   = 1900.0 "Yaw inertia [kg*m^2]";
+  parameter Real g    = 9.81   "Gravity [m/s^2]";
+
+  // --- Tires (cornering stiffness per axle) ---
+  parameter Real Cf = 110000.0 "Front cornering stiffness [N/rad]";
+  parameter Real Cr = 110000.0 "Rear cornering stiffness [N/rad]";
+
+  // --- Steering ---
+  parameter Real delta_max = 0.55 "Max steering angle [rad] (~31 deg)";
+  parameter Real tau_steer = 0.12 "Steering lag time constant [s]";
+
+  // --- Driveline ---
+  parameter Real F_peak       = 6000.0 "Peak tractive force [N]";
+  parameter Real F_brake_peak = 9000.0 "Peak braking force [N]";
+  parameter Real c_roll       = 90.0   "Rolling resistance [N]";
+  parameter Real c_drag       = 0.20   "Aero drag coeff [N/(m/s)^2]";
+
+  // --- Engine (for the tachometer) ---
+  parameter Real idle_rpm    = 900.0  "Idle engine speed [rpm]";
+  parameter Real redline_rpm = 6500.0 "Redline engine speed [rpm]";
+
+  // --- Numerical stabilizers ---
+  parameter Real v_eps  = 1.0 "Speed floor for slip-angle denominator [m/s]";
+  parameter Real v_act  = 2.5 "Speed at which tire dynamics fully activate [m/s]";
+  parameter Real k_lat  = 6.0 "Low-speed lateral-velocity damping [1/s]";
+  parameter Real k_yaw  = 6.0 "Low-speed yaw relaxation gain [1/s]";
 
   // --- Inputs ---
-  input Real throttle(start = 0) "Throttle stick [-1..1]";
-  input Real steering(start = 0)    "Steering stick [-1..1]";
+  input Real throttle(start = 0)   "Accelerator (+) / brake (-) [-1..1]";
+  input Real steering(start = 0)   "Steering command [-1..1]";
+  input Real mu(start = 0.9)       "Terrain friction coefficient";
+  input Real shift_up(start = 0)   "Pulse > 0.5 to shift up";
+  input Real shift_down(start = 0) "Pulse > 0.5 to shift down";
 
-  // --- States ---
+  // --- Continuous states ---
   Real x(start = 0)     "World X [m]";
   Real y(start = 0)     "World Y [m]";
   Real theta(start = 0) "Heading [rad]";
-  Real v(start = 0)     "Longitudinal speed [m/s]";
-  Real delta(start = 0) "Steering angle [rad]";
+  Real vx(start = 0)    "Body longitudinal velocity [m/s]";
+  Real vy(start = 0)    "Body lateral velocity [m/s]";
+  Real r(start = 0)     "Yaw rate [rad/s]";
+  Real delta(start = 0) "Front steering angle [rad]";
 
-  // --- Exposed scene-visualization helpers ---
-  // The JS scene reads these to spin wheels and yaw the front pair.
-  output Real wheel_rpm       "Rear-wheel angular speed [rad/s]";
-  output Real front_wheel_yaw "Steering angle [rad] (same as delta)";
+  // --- Discrete state: the manual gear ---
+  discrete Integer gear(start = 1) "-1=R, 0=N, 1/2/3 forward";
+
+  // --- Outputs the 3D renderer reads (names are a hard contract) ---
+  output Real wheel_rpm       "Rear wheel angular speed [rad/s]";
+  output Real front_wheel_yaw "Front steering angle [rad]";
   output Real yaw_rate        "d(theta)/dt [rad/s]";
+  // --- Outputs the cockpit HUD reads ---
+  output Real speed       "Signed longitudinal speed vx [m/s]";
+  output Real gear_out    "gear as Real: -1 R, 0 N, 1/2/3";
+  output Real slip_deg    "Sideslip angle [deg] (drift indicator)";
+  output Real engine_rpm  "Engine speed for the tachometer [rpm]";
+
+protected
+  Real Fzf "Front axle static load [N]";
+  Real Fzr "Rear axle static load [N]";
+  Real vx_safe "Longitudinal speed floored away from 0 [m/s]";
+  Real alpha_f "Front slip angle [rad]";
+  Real alpha_r "Rear slip angle [rad]";
+  Real Fyf "Front lateral tire force [N]";
+  Real Fyr "Rear lateral tire force [N]";
+  Real s "Tire-dynamics speed activation [0..1]";
+  Real r_kin "Kinematic yaw rate [rad/s]";
+  // dir / v_max_gear are DISCRETE: they depend on the discrete gear, and
+  // relations on a discrete variable only evaluate correctly AT an event (they
+  // don't latch between events). So we recompute them in a \`when change(gear)\`
+  // block, where they latch as discrete states between shifts.
+  discrete Real dir(start = 1.0) "Drive direction from gear: -1 / 0 / 1";
+  discrete Real v_max_gear(start = 13.0) "Top speed of the engaged gear [m/s]";
+  Real v_in "Speed along the gear's drive direction [m/s]";
+  Real gas "Accelerator pedal [0..1]";
+  Real brake "Brake pedal [0..1]";
+  Real F_trac "Longitudinal traction force [N]";
+  Real rear_lat_cap "Rear lateral grip after longitudinal use [N]";
+  Real Fx "Net longitudinal force [N]";
 
 equation
-  // First-order commands: state tracks setpoint with tau_*.
-  der(v)     = (throttle * v_max - v)            / tau_speed;
-  der(delta) = (steering    * delta_max - delta)    / tau_steer;
+  // --- Manual gearbox: discrete state machine, rising-edge shifts ---
+  when shift_up > 0.5 then
+    gear = min(pre(gear) + 1, 3);
+  elsewhen shift_down > 0.5 then
+    gear = max(pre(gear) - 1, -1);
+  end when;
 
-  // Kinematic bicycle.
-  der(x)     = v * cos(theta);
-  der(y)     = v * sin(theta);
-  der(theta) = v * tan(delta) / wheelbase;
+  // Latch the gear-dependent driveline params whenever the gear changes.
+  // Evaluated at the event (relations on gear are valid there) and held after.
+  // gear order: -1 (R) < 0 (N) < 1 < 2 < 3.
+  when change(gear) then
+    dir = if gear < 0 then -1.0 elseif gear < 1 then 0.0 else 1.0;
+    v_max_gear = if gear < 0 then 8.0       // reverse
+                 elseif gear < 1 then 0.1   // neutral (dir = 0, value unused)
+                 elseif gear < 2 then 13.0  // gear 1 (~29 mph)
+                 elseif gear < 3 then 24.0  // gear 2 (~54 mph)
+                 else 38.0;                 // gear 3 (~80+ mph, drag-limited)
+  end when;
 
-  // Derived outputs for the viewer.
-  wheel_rpm       = v / wheel_radius;
+  // --- Steering lag ---
+  der(delta) = (steering * delta_max - delta) / tau_steer;
+
+  // --- Static axle loads ---
+  Fzf = mass * g * b_cg / wheelbase;
+  Fzr = mass * g * a_cg / wheelbase;
+
+  // --- Slip angles (floored denominator avoids the vx=0 singularity) ---
+  vx_safe = if abs(vx) < v_eps then (if vx >= 0 then v_eps else -v_eps) else vx;
+  alpha_f = atan((vy + a_cg * r) / vx_safe) - delta;
+  alpha_r = atan((vy - b_cg * r) / vx_safe);
+
+  // --- Longitudinal force from the engaged gear (dir/v_max_gear are the
+  //     latched discrete params set in the \`when change(gear)\` block above) ---
+  gas   = max(throttle, 0.0);
+  brake = max(-throttle, 0.0);
+  v_in  = dir * vx;
+  F_trac = dir * F_peak * gas * max(0.0, 1.0 - v_in / v_max_gear);
+  Fx = F_trac
+       - brake * F_brake_peak * tanh(vx / 0.5)                  // braking
+       - c_roll * tanh(vx / 0.5)                                // rolling
+       - c_drag * vx * abs(vx);                                 // aero drag
+
+  // --- Lateral tire forces, saturated at the friction limit mu*Fz. The rear
+  //     is RWD: longitudinal traction eats into its lateral grip (friction
+  //     ellipse), so flooring it in a corner breaks the rear loose => drift. ---
+  rear_lat_cap = mu * Fzr
+    * sqrt(max(0.04, 1.0 - (F_trac / (mu * Fzr)) * (F_trac / (mu * Fzr))));
+  Fyf = -mu * Fzf * tanh(Cf * alpha_f / (mu * Fzf));
+  Fyr = -rear_lat_cap * tanh(Cr * alpha_r / rear_lat_cap);
+
+  // --- Low-speed blend: fade tires in with speed, relax toward kinematic. The
+  //     dynamic single-track is directionally unstable when driven backward
+  //     (a real car is too), so reverse is genuinely twitchy — that's correct. ---
+  s = tanh(abs(vx) / v_act);
+  r_kin = vx * tan(delta) / wheelbase;
+
+  // --- Rigid-body planar dynamics (explicit der form) ---
+  der(vx) = vy * r + (Fx - s * Fyf * sin(delta)) / mass;
+  der(vy) = -vx * r + (s * (Fyf * cos(delta) + Fyr)) / mass - (1.0 - s) * k_lat * vy;
+  der(r)  = (s * (a_cg * Fyf * cos(delta) - b_cg * Fyr)) / Iz
+            + (1.0 - s) * k_yaw * (r_kin - r);
+
+  // --- Kinematics ---
+  der(x) = vx * cos(theta) - vy * sin(theta);
+  der(y) = vx * sin(theta) + vy * cos(theta);
+  der(theta) = r;
+
+  // --- Outputs ---
+  wheel_rpm       = vx / wheel_radius;
   front_wheel_yaw = delta;
-  yaw_rate        = v * tan(delta) / wheelbase;
+  yaw_rate        = r;
+  speed           = vx;
+  gear_out        = gear;
+  slip_deg        = atan(vy / vx_safe) * 180.0 / pi;
+  // Tachometer: revs rise from idle to redline as the gear approaches its top
+  // speed, so upshifting drops the needle (the gear ratio is what matters).
+  engine_rpm = idle_rpm
+    + (redline_rpm - idle_rpm) * min(1.05, abs(v_in) / v_max_gear);
 
 end Rover;
 `;

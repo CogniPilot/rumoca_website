@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import RealTimeViewer from './RealTimeViewer';
 import HUD from './HUD';
 import FlightHud from './FlightHud';
+import RoverHud from './RoverHud';
 import ControlsHelp from './ControlsHelp';
+import TouchControls from './TouchControls';
 import ConfigPanel, { type EnvironmentType, type AircraftType } from './ConfigPanel';
 import { InputManager, type RCState, type InputMode } from '../../lib/input-manager';
 import type { SimulationSource } from '../../lib/simulation-source';
@@ -57,7 +59,16 @@ const TRACKED_NAMES: Record<AircraftType, string[]> = {
   ],
   rover: [
     'x', 'y', 'theta', 'wheel_rpm', 'front_wheel_yaw',
+    'speed', 'gear_out', 'slip_deg', 'engine_rpm',
   ],
+};
+
+/** Terrain friction coefficient handed to the rover model per environment.
+ *  Lower μ → the rover loses grip and drifts sooner. */
+const MU_BY_ENV: Record<EnvironmentType, number> = {
+  desert: 0.9,  // dry sand — high grip
+  forest: 0.7,  // dirt / grass
+  arctic: 0.35, // snow / ice — slides
 };
 
 function getModelConfig(aircraft: AircraftType): {
@@ -76,20 +87,24 @@ function getModelConfig(aircraft: AircraftType): {
 
 function applyInputs(
   source: SimulationSource,
-  rc: RCState,
+  input: InputManager,
   aircraft: AircraftType,
-  armed: boolean,
+  mu: number,
 ) {
+  const rc = input.rc;
   if (aircraft === 'rover') {
-    source.setInput('throttle', rc.throttle);
+    source.setInput('throttle', rc.throttle); // gas (+) / brake (-)
     source.setInput('steering', rc.roll);
+    source.setInput('shift_up', input.shiftUp);
+    source.setInput('shift_down', input.shiftDown);
+    source.setInput('mu', mu);
     return;
   }
   source.setInput('stick_roll', rc.roll);
   source.setInput('stick_pitch', rc.pitch);
   source.setInput('stick_yaw', rc.yaw);
   source.setInput('stick_throttle', rc.throttle);
-  source.setInput('armed', armed ? 1.0 : 0.0);
+  source.setInput('armed', input.armed ? 1.0 : 0.0);
 }
 
 function getCameraTarget(source: SimulationSource, aircraft: AircraftType): THREE.Vector3 {
@@ -122,7 +137,12 @@ function getCameraTarget(source: SimulationSource, aircraft: AircraftType): THRE
  *  (matches the rumoca quadrotor scene) — otherwise the camera swings to the
  *  side whenever the quad pitches to translate. */
 function getVehicleHeading(source: SimulationSource, aircraft: AircraftType): number | null {
-  if (aircraft === 'rover') return null;
+  if (aircraft === 'rover') {
+    // Rover forward (body +X) maps to three (cos θ, sin θ) in (x,z); the chase
+    // azimuth that sits the camera behind it is atan2(forward.x, forward.z).
+    const theta = source.get('theta') ?? 0;
+    return Math.atan2(Math.cos(theta), Math.sin(theta));
+  }
   const q0 = source.get('quat[1]') ?? 1;
   const q1 = source.get('quat[2]') ?? 0;
   const q2 = source.get('quat[3]') ?? 0;
@@ -162,6 +182,27 @@ function compileNote(ac: AircraftType): string {
 
 type CompileStatus = 'idle' | 'compiling' | 'running' | 'error';
 
+/** Viewport flags for responsive layout / touch controls. */
+function useViewport() {
+  const read = () => ({
+    isMobile: typeof window !== 'undefined' && window.innerWidth < 768,
+    isTouch:
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0),
+  });
+  const [v, setV] = useState(read);
+  useEffect(() => {
+    const on = () => setV(read());
+    window.addEventListener('resize', on);
+    window.addEventListener('orientationchange', on);
+    return () => {
+      window.removeEventListener('resize', on);
+      window.removeEventListener('orientationchange', on);
+    };
+  }, []);
+  return v;
+}
+
 export default function SimulationApp() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -193,6 +234,31 @@ export default function SimulationApp() {
 
   const aircraftTypeRef = useRef(aircraftType);
   aircraftTypeRef.current = aircraftType;
+  const environmentRef = useRef(environment);
+  environmentRef.current = environment;
+  const { isMobile, isTouch } = useViewport();
+
+  // Fullscreen API (Android Chrome). iOS Safari lacks requestFullscreen for
+  // elements — the optional chaining no-ops there; iOS users go fullscreen via
+  // "Add to Home Screen" (display:fullscreen in the manifest) instead.
+  const [isFs, setIsFs] = useState(false);
+  useEffect(() => {
+    const on = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const toggleFullscreen = useCallback(() => {
+    // Fullscreen the sim container, not the document — the navbar lives outside
+    // it, so it's excluded rather than carried into fullscreen.
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else rootRef.current?.requestFullscreen?.().catch(() => {});
+  }, []);
+
+  // Use the compact, decluttered layout on phones AND whenever fullscreen —
+  // fullscreen survives an orientation change that would otherwise push the
+  // width past the mobile breakpoint and bring the big panels back.
+  const compact = isMobile || isFs;
 
   const clearScene = useCallback(() => {
     const scene = sceneRef.current;
@@ -297,7 +363,7 @@ export default function SimulationApp() {
         camTargetRef.current.copy(reset.target);
       }
 
-      applyInputs(source, input.rc, aircraftTypeRef.current, input.armed);
+      applyInputs(source, input, aircraftTypeRef.current, MU_BY_ENV[environmentRef.current]);
       // Worker steps internally; no source.step() needed.
 
       aircraft.update(source, 0.016);
@@ -309,12 +375,24 @@ export default function SimulationApp() {
 
       const target = camTargetRef.current;
       target.copy(getCameraTarget(source, aircraftTypeRef.current));
+
+      // Gamepad d-pad orbits the camera. The azimuth change only persists with
+      // HUD view off; with it on, the chase-cam lock below overrides it.
+      const ORBIT_STEP = 0.03;
+      if (input.viewAzimuth) camAngleRef.current -= input.viewAzimuth * ORBIT_STEP;
+      if (input.viewElevation) {
+        camElevRef.current = Math.max(
+          -1.2,
+          Math.min(1.5, camElevRef.current + input.viewElevation * ORBIT_STEP),
+        );
+      }
+
       const dist = camDistRef.current;
       const elev = camElevRef.current;
       // HUD view locks the azimuth behind the vehicle (chase cam); otherwise the
       // mouse-controlled angle lets the user orbit freely.
       let angle = camAngleRef.current;
-      if (input.hudVisible && aircraftTypeRef.current !== 'rover') {
+      if (input.hudVisible) {
         const heading = getVehicleHeading(source, aircraftTypeRef.current);
         if (heading != null) {
           angle = heading + Math.PI;
@@ -386,10 +464,48 @@ export default function SimulationApp() {
         lastMouseRef.current = { x: e.clientX, y: e.clientY };
       };
 
+      // Touch: one finger orbits (background only — the virtual sticks capture
+      // their own touches), two fingers pinch-zoom.
+      let lastTouch = { x: 0, y: 0 };
+      let pinchDist = 0;
+      const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 1) {
+          draggingRef.current = true;
+          lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        } else if (e.touches.length === 2) {
+          draggingRef.current = false;
+          pinchDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY,
+          );
+        }
+      };
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 1 && draggingRef.current) {
+          const t = e.touches[0];
+          camAngleRef.current -= (t.clientX - lastTouch.x) * 0.005;
+          camElevRef.current = Math.max(-1.2, Math.min(1.5, camElevRef.current + (t.clientY - lastTouch.y) * 0.005));
+          lastTouch = { x: t.clientX, y: t.clientY };
+          e.preventDefault();
+        } else if (e.touches.length === 2) {
+          const d = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY,
+          );
+          camDistRef.current = Math.max(1, Math.min(40, camDistRef.current + (pinchDist - d) * 0.02));
+          pinchDist = d;
+          e.preventDefault();
+        }
+      };
+      const onTouchEnd = (e: TouchEvent) => { if (e.touches.length === 0) draggingRef.current = false; };
+
       el.addEventListener('wheel', onWheel);
       el.addEventListener('mousedown', onMouseDown);
       window.addEventListener('mouseup', onMouseUp);
       window.addEventListener('mousemove', onMouseMove);
+      el.addEventListener('touchstart', onTouchStart, { passive: false });
+      el.addEventListener('touchmove', onTouchMove, { passive: false });
+      el.addEventListener('touchend', onTouchEnd);
     }, 200);
     return () => clearInterval(checkInterval);
   }, [started]);
@@ -423,7 +539,7 @@ export default function SimulationApp() {
 
   // ─── Simulation view ─────────────────────────────────────────────────────
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div ref={rootRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#0c0f12' }}>
       <style>{`
         @keyframes sim-spin { to { transform: rotate(360deg); } }
       `}</style>
@@ -504,43 +620,51 @@ export default function SimulationApp() {
           )}
         </div>
       )}
-      <HUD
-        source={sourceRef.current}
-        rc={rc}
-        inputMode={inputMode}
-        status={aircraftLabel(aircraftType)}
-        armed={aircraftType === 'rover' ? undefined : armed}
-      />
+      {!compact && (
+        <HUD
+          source={sourceRef.current}
+          rc={rc}
+          inputMode={inputMode}
+          status={aircraftLabel(aircraftType)}
+          armed={aircraftType === 'rover' ? undefined : armed}
+        />
+      )}
       <ConfigPanel
         environment={environment}
         aircraft={aircraftType}
         onEnvironmentChange={setEnvironment}
         onAircraftChange={setAircraftType}
         loading={compileStatus === 'compiling'}
+        compact={compact}
       />
       {aircraftType !== 'rover' && (
         <FlightHud
           visible={hudVisible}
+          compact={compact}
           sourceRef={sourceRef}
           inputRef={inputRef}
           aircraftType={aircraftType}
         />
       )}
-      <ControlsHelp inputMode={inputMode} profile={aircraftType} />
+      {aircraftType === 'rover' && (
+        <RoverHud visible={hudVisible} compact={compact} sourceRef={sourceRef} inputRef={inputRef} />
+      )}
+      {isTouch && <TouchControls profile={aircraftType} inputRef={inputRef} />}
+      {!isTouch && <ControlsHelp inputMode={inputMode} profile={aircraftType} />}
       <button
         onClick={handleStop}
         style={{
           position: 'absolute',
-          top: 76,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '4px 12px',
+          top: compact ? 10 : 76,
+          left: compact ? 8 : '50%',
+          transform: compact ? 'none' : 'translateX(-50%)',
+          padding: compact ? '8px 14px' : '4px 12px',
           background: 'rgba(30,20,10,0.75)',
           color: '#a89070',
           border: '1px solid rgba(200,160,80,0.2)',
           borderRadius: 6,
           fontFamily: 'monospace',
-          fontSize: 11,
+          fontSize: compact ? 13 : 11,
           cursor: 'pointer',
           backdropFilter: 'blur(4px)',
           zIndex: 12,
@@ -549,7 +673,7 @@ export default function SimulationApp() {
       >
         ← Setup
       </button>
-      {aircraftType !== 'rover' && (
+      {(
         <button
           onClick={() => {
             const input = inputRef.current;
@@ -559,24 +683,51 @@ export default function SimulationApp() {
           }}
           style={{
             position: 'absolute',
-            top: 108,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '4px 12px',
+            top: compact ? 52 : 108,
+            left: compact ? 8 : '50%',
+            transform: compact ? 'none' : 'translateX(-50%)',
+            padding: compact ? '8px 14px' : '4px 12px',
             background: hudVisible ? 'rgba(94,255,190,0.16)' : 'rgba(30,20,10,0.75)',
             color: hudVisible ? 'rgba(94,255,190,0.92)' : '#a89070',
             border: `1px solid ${hudVisible ? 'rgba(94,255,190,0.5)' : 'rgba(200,160,80,0.2)'}`,
             borderRadius: 6,
             fontFamily: 'monospace',
-            fontSize: 11,
+            fontSize: isMobile ? 13 : 11,
             cursor: 'pointer',
             backdropFilter: 'blur(4px)',
             zIndex: 12,
             whiteSpace: 'nowrap',
           }}
-          title="Toggle HUD view: chase camera locked behind the vehicle (on) vs. free orbit (off). Shortcut: H"
+          title={
+            aircraftType === 'rover'
+              ? 'Toggle cockpit HUD (speedometer, gear, steering). Shortcut: H'
+              : 'Toggle HUD view: chase camera locked behind the vehicle (on) vs. free orbit (off). Shortcut: H'
+          }
         >
-          HUD view: {hudVisible ? 'ON' : 'OFF'}
+          {aircraftType === 'rover' ? 'Cockpit' : 'HUD view'}: {hudVisible ? 'ON' : 'OFF'}
+        </button>
+      )}
+      {isTouch && typeof document !== 'undefined' && document.fullscreenEnabled && (
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            position: 'absolute',
+            top: 94,
+            left: 8,
+            padding: '8px 14px',
+            background: isFs ? 'rgba(94,255,190,0.16)' : 'rgba(30,20,10,0.75)',
+            color: isFs ? 'rgba(94,255,190,0.92)' : '#a89070',
+            border: `1px solid ${isFs ? 'rgba(94,255,190,0.5)' : 'rgba(200,160,80,0.2)'}`,
+            borderRadius: 6,
+            fontFamily: 'monospace',
+            fontSize: 13,
+            cursor: 'pointer',
+            backdropFilter: 'blur(4px)',
+            zIndex: 12,
+          }}
+          title="Toggle fullscreen"
+        >
+          {isFs ? '⛶ Exit' : '⛶ Full'}
         </button>
       )}
       <button
@@ -661,9 +812,10 @@ function SetupView({
     ].join(' ');
 
   return (
-    <div className="w-full h-full flex items-center justify-center px-4 py-8 bg-bg overflow-y-auto">
-      <div className="w-full max-w-xl rounded-xl border border-border bg-surface p-8 shadow-sm">
-        <h1 className="text-2xl font-bold text-text mb-2">Choose a vehicle</h1>
+    <div className="w-full h-full overflow-y-auto bg-bg">
+      <div className="min-h-full flex items-center justify-center px-4 py-8">
+        <div className="w-full max-w-xl rounded-xl border border-border bg-surface p-6 sm:p-8 shadow-sm">
+          <h1 className="text-2xl font-bold text-text mb-2">Choose a vehicle</h1>
         <p className="text-text-muted text-sm leading-relaxed mb-8">
           The Modelica model compiles in a background worker when you press Start — the page stays
           responsive, and you can cancel by clicking any nav link. The closed-loop quadrotor and fixed
@@ -714,6 +866,7 @@ function SetupView({
           >
             Start Simulation →
           </button>
+          </div>
         </div>
       </div>
     </div>
